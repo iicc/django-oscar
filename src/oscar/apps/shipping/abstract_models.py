@@ -1,29 +1,27 @@
 # -*- coding: utf-8 -*-
 from decimal import Decimal as D
 
-from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
-from django.utils.translation import ugettext_lazy as _
 from django.core.validators import MinValueValidator
+from django.db import models
+from django.utils.translation import gettext_lazy as _
 
-from oscar.core import prices, loading
+from oscar.core import loading, prices
 from oscar.models.fields import AutoSlugField
 
 Scale = loading.get_class('shipping.scales', 'Scale')
 
 
-@python_2_unicode_compatible
 class AbstractBase(models.Model):
     """
     Implements the interface declared by shipping.base.Base
     """
     code = AutoSlugField(_("Slug"), max_length=128, unique=True,
-                         populate_from='name')
-    name = models.CharField(_("Name"), max_length=128, unique=True)
+                         populate_from='name', db_index=True)
+    name = models.CharField(_("Name"), max_length=128, unique=True, db_index=True)
     description = models.TextField(_("Description"), blank=True)
 
     # We allow shipping methods to be linked to a specific set of countries
-    countries = models.ManyToManyField('address.Country', null=True,
+    countries = models.ManyToManyField('address.Country',
                                        blank=True, verbose_name=_("Countries"))
 
     # We need this to mimic the interface of the Base shipping method
@@ -38,6 +36,13 @@ class AbstractBase(models.Model):
 
     def __str__(self):
         return self.name
+
+    def discount(self, basket):
+        """
+        Return the discount on the standard shipping charge
+        """
+        # This method is identical to the Base.discount().
+        return D('0.00')
 
 
 class AbstractOrderAndItemCharges(AbstractBase):
@@ -71,8 +76,8 @@ class AbstractOrderAndItemCharges(AbstractBase):
         verbose_name_plural = _("Order and Item Charges")
 
     def calculate(self, basket):
-        if (self.free_shipping_threshold is not None and
-                basket.total_incl_tax >= self.free_shipping_threshold):
+        if (self.free_shipping_threshold is not None
+                and basket.total_incl_tax >= self.free_shipping_threshold):
             return prices.Price(
                 currency=basket.currency, excl_tax=D('0.00'),
                 incl_tax=D('0.00'))
@@ -146,13 +151,16 @@ class AbstractWeightBased(AbstractBase):
             return D('0.00')
 
         top_band = self.top_band
-        if weight < top_band.upper_limit:
+        if weight <= top_band.upper_limit:
             band = self.get_band_for_weight(weight)
             return band.charge
         else:
             quotient, remaining_weight = divmod(weight, top_band.upper_limit)
-            remainder_band = self.get_band_for_weight(remaining_weight)
-            return quotient * top_band.charge + remainder_band.charge
+            if remaining_weight:
+                remainder_band = self.get_band_for_weight(remaining_weight)
+                return quotient * top_band.charge + remainder_band.charge
+            else:
+                return quotient * top_band.charge
 
     def get_band_for_weight(self, weight):
         """
@@ -176,15 +184,17 @@ class AbstractWeightBased(AbstractBase):
             return None
 
 
-@python_2_unicode_compatible
 class AbstractWeightBand(models.Model):
     """
     Represents a weight band which are used by the WeightBasedShipping method.
     """
     method = models.ForeignKey(
-        'shipping.WeightBased', related_name='bands', verbose_name=_("Method"))
+        'shipping.WeightBased',
+        on_delete=models.CASCADE,
+        related_name='bands',
+        verbose_name=_("Method"))
     upper_limit = models.DecimalField(
-        _("Upper Limit"), decimal_places=3, max_digits=12,
+        _("Upper Limit"), decimal_places=3, max_digits=12, db_index=True,
         validators=[MinValueValidator(D('0.00'))],
         help_text=_("Enter upper limit of this weight band in kg. The lower "
                     "limit will be determined by the other weight bands."))

@@ -1,15 +1,18 @@
 import logging
 
-from django.http import HttpResponseRedirect
-from django.core.urlresolvers import reverse, NoReverseMatch
-from django.contrib.sites.models import Site, get_current_site
+from django.contrib.sites.models import Site
+from django.contrib.sites.shortcuts import get_current_site
 from django.core.exceptions import ObjectDoesNotExist
+from django.http import HttpResponseRedirect
+from django.urls import NoReverseMatch, reverse
 
+from oscar.apps.checkout.signals import post_checkout
 from oscar.core.loading import get_class, get_model
 
 OrderCreator = get_class('order.utils', 'OrderCreator')
 Dispatcher = get_class('customer.utils', 'Dispatcher')
 CheckoutSessionMixin = get_class('checkout.session', 'CheckoutSessionMixin')
+BillingAddress = get_model('order', 'BillingAddress')
 ShippingAddress = get_model('order', 'ShippingAddress')
 OrderNumberGenerator = get_class('order.utils', 'OrderNumberGenerator')
 PaymentEventType = get_model('order', 'PaymentEventType')
@@ -18,9 +21,6 @@ PaymentEventQuantity = get_model('order', 'PaymentEventQuantity')
 UserAddress = get_model('address', 'UserAddress')
 Basket = get_model('basket', 'Basket')
 CommunicationEventType = get_model('customer', 'CommunicationEventType')
-UnableToPlaceOrder = get_class('order.exceptions', 'UnableToPlaceOrder')
-
-post_checkout = get_class('checkout.signals', 'post_checkout')
 
 # Standard logger for checkout events
 logger = logging.getLogger('oscar.checkout')
@@ -109,7 +109,7 @@ class OrderPlacementMixin(CheckoutSessionMixin):
         order = self.place_order(
             order_number=order_number, user=user, basket=basket,
             shipping_address=shipping_address, shipping_method=shipping_method,
-            shipping_charge=shipping_charge, order_total=order_total, 
+            shipping_charge=shipping_charge, order_total=order_total,
             billing_address=billing_address, **kwargs)
         basket.submit()
         return self.handle_successful_order(order)
@@ -127,12 +127,17 @@ class OrderPlacementMixin(CheckoutSessionMixin):
         # We pass the kwargs as they often include the billing address form
         # which will be needed to save a billing address.
         billing_address = self.create_billing_address(
-            billing_address, shipping_address, **kwargs)
+            user, billing_address, shipping_address, **kwargs)
 
         if 'status' not in kwargs:
             status = self.get_initial_order_status(basket)
         else:
             status = kwargs.pop('status')
+
+        if 'request' not in kwargs:
+            request = getattr(self, 'request', None)
+        else:
+            request = kwargs.pop('request')
 
         order = OrderCreator().place_order(
             user=user,
@@ -143,7 +148,9 @@ class OrderPlacementMixin(CheckoutSessionMixin):
             shipping_charge=shipping_charge,
             total=order_total,
             billing_address=billing_address,
-            status=status, **kwargs)
+            status=status,
+            request=request,
+            **kwargs)
         self.save_payment_details(order)
         return order
 
@@ -159,32 +166,38 @@ class OrderPlacementMixin(CheckoutSessionMixin):
         if not shipping_address:
             return None
         shipping_address.save()
-        if user.is_authenticated():
+        if user.is_authenticated:
             self.update_address_book(user, shipping_address)
         return shipping_address
 
-    def update_address_book(self, user, shipping_addr):
+    def update_address_book(self, user, addr):
         """
         Update the user's address book based on the new shipping address
         """
         try:
             user_addr = user.addresses.get(
-                hash=shipping_addr.generate_hash())
+                hash=addr.generate_hash())
         except ObjectDoesNotExist:
             # Create a new user address
             user_addr = UserAddress(user=user)
-            shipping_addr.populate_alternative_model(user_addr)
-        user_addr.num_orders += 1
+            addr.populate_alternative_model(user_addr)
+        if isinstance(addr, ShippingAddress):
+            user_addr.num_orders_as_shipping_address += 1
+        if isinstance(addr, BillingAddress):
+            user_addr.num_orders_as_billing_address += 1
         user_addr.save()
 
-    def create_billing_address(self, billing_address=None,
+    def create_billing_address(self, user, billing_address=None,
                                shipping_address=None, **kwargs):
         """
         Saves any relevant billing data (eg a billing address).
         """
-        if billing_address is not None:
-            billing_address.save()
-            return billing_address
+        if not billing_address:
+            return None
+        billing_address.save()
+        if user.is_authenticated:
+            self.update_address_book(user, billing_address)
+        return billing_address
 
     def save_payment_details(self, order):
         """
@@ -203,10 +216,9 @@ class OrderPlacementMixin(CheckoutSessionMixin):
         for event in self._payment_events:
             event.order = order
             event.save()
-        # We assume all lines are involved in the initial payment event
-        for line in order.lines.all():
-            PaymentEventQuantity.objects.create(
-                event=event, line=line, quantity=line.quantity)
+            for line in order.lines.all():
+                PaymentEventQuantity.objects.create(
+                    event=event, line=line, quantity=line.quantity)
 
     def save_payment_sources(self, order):
         """
@@ -257,7 +269,17 @@ class OrderPlacementMixin(CheckoutSessionMixin):
         return reverse('checkout:thank-you')
 
     def send_confirmation_message(self, order, code, **kwargs):
-        ctx = self.get_message_context(order)
+        try:
+            ctx = self.get_message_context(order, code)
+        except TypeError:
+            # It seems like the get_message_context method was overridden and
+            # it does not support the code argument yet
+            logger.warning(
+                'The signature of the get_message_context method has changed, '
+                'please update it in your codebase'
+            )
+            ctx = self.get_message_context(order)
+
         try:
             event_type = CommunicationEventType.objects.get(code=code)
         except CommunicationEventType.DoesNotExist:
@@ -279,7 +301,7 @@ class OrderPlacementMixin(CheckoutSessionMixin):
             logger.warning("Order #%s - no %s communication event type",
                            order.number, code)
 
-    def get_message_context(self, order):
+    def get_message_context(self, order, code=None):
         ctx = {
             'user': self.request.user,
             'order': order,
@@ -287,19 +309,21 @@ class OrderPlacementMixin(CheckoutSessionMixin):
             'lines': order.lines.all()
         }
 
-        if not self.request.user.is_authenticated():
-            # Attempt to add the anon order status URL to the email template
-            # ctx.
-            try:
+        # Attempt to add the order status URL to the email template ctx.
+        try:
+            if self.request.user.is_authenticated:
+                path = reverse('customer:order',
+                               kwargs={'order_number': order.number})
+            else:
                 path = reverse('customer:anon-order',
                                kwargs={'order_number': order.number,
                                        'hash': order.verification_hash()})
-            except NoReverseMatch:
-                # We don't care that much if we can't resolve the URL
-                pass
-            else:
-                site = Site.objects.get_current()
-                ctx['status_url'] = 'http://%s%s' % (site.domain, path)
+        except NoReverseMatch:
+            # We don't care that much if we can't resolve the URL
+            pass
+        else:
+            site = Site.objects.get_current()
+            ctx['status_url'] = 'http://%s%s' % (site.domain, path)
         return ctx
 
     # Basket helpers

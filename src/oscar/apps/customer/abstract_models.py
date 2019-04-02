@@ -1,27 +1,27 @@
-from django.utils import six
-import hashlib
-import random
-
 from django.conf import settings
 from django.contrib.auth import models as auth_models
-from django.core.urlresolvers import reverse
+from django.core.validators import RegexValidator
 from django.db import models
-from django.template import Template, Context, TemplateDoesNotExist
+from django.template import TemplateDoesNotExist, engines
 from django.template.loader import get_template
+from django.urls import reverse
 from django.utils import timezone
-from django.utils.encoding import python_2_unicode_compatible
-from django.utils.translation import ugettext_lazy as _
+from django.utils.crypto import get_random_string
+from django.utils.translation import gettext_lazy as _
 
-from oscar.apps.customer.managers import CommunicationTypeManager
 from oscar.core.compat import AUTH_USER_MODEL
+from oscar.core.loading import get_class
 from oscar.models.fields import AutoSlugField
+
+
+CommunicationTypeManager = get_class('customer.managers', 'CommunicationTypeManager')
 
 
 class UserManager(auth_models.BaseUserManager):
 
     def create_user(self, email, password=None, **extra_fields):
         """
-        Creates and saves a User with the given username, email and
+        Creates and saves a User with the given email and
         password.
         """
         now = timezone.now()
@@ -94,10 +94,10 @@ class AbstractUser(auth_models.AbstractBaseUser,
         ProductAlert = self.alerts.model
         alerts = ProductAlert.objects.filter(
             email=self.email, status=ProductAlert.ACTIVE)
-        alerts.update(user=self, key=None, email=None)
+        alerts.update(user=self, key='', email='')
 
     def save(self, *args, **kwargs):
-        super(AbstractUser, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
         # Migrate any "anonymous" product alerts to the registered user
         # Ideally, this would be done via a post-save signal. But we can't
         # use get_user_model to wire up signals to custom user models
@@ -105,14 +105,18 @@ class AbstractUser(auth_models.AbstractBaseUser,
         self._migrate_alerts_to_user()
 
 
-@python_2_unicode_compatible
 class AbstractEmail(models.Model):
     """
     This is a record of all emails sent to a customer.
     Normally, we only record order-related emails.
     """
-    user = models.ForeignKey(AUTH_USER_MODEL, related_name='emails',
-                             verbose_name=_("User"))
+    user = models.ForeignKey(
+        AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='emails',
+        verbose_name=_("User"),
+        null=True)
+    email = models.EmailField(_('Email Address'), null=True, blank=True)
     subject = models.TextField(_('Subject'), max_length=255)
     body_text = models.TextField(_("Body Text"))
     body_html = models.TextField(_("Body HTML"), blank=True)
@@ -125,14 +129,17 @@ class AbstractEmail(models.Model):
         verbose_name_plural = _('Emails')
 
     def __str__(self):
-        return _(u"Email to %(user)s with subject '%(subject)s'") % {
-            'user': self.user.get_username(), 'subject': self.subject}
+        if self.user:
+            return _("Email to %(user)s with subject '%(subject)s'") % {
+                'user': self.user.get_username(), 'subject': self.subject}
+        else:
+            return _("Anonymous email to %(email)s with subject '%(subject)s'") % {
+                'email': self.email, 'subject': self.subject}
 
 
-@python_2_unicode_compatible
 class AbstractCommunicationEventType(models.Model):
     """
-    A 'type' of communication.  Like a order confirmation email.
+    A 'type' of communication.  Like an order confirmation email.
     """
 
     #: Code used for looking up this event programmatically.
@@ -140,7 +147,13 @@ class AbstractCommunicationEventType(models.Model):
     # it's a useful convention that's been enforced in previous Oscar versions
     code = AutoSlugField(
         _('Code'), max_length=128, unique=True, populate_from='name',
-        separator=six.u("_"), uppercase=True, editable=True,
+        separator="_", uppercase=True, editable=True,
+        validators=[
+            RegexValidator(
+                regex=r'^[a-zA-Z_][0-9a-zA-Z_]*$',
+                message=_(
+                    "Code can only contain the letters a-z, A-Z, digits, "
+                    "and underscores, and can't start with a digit."))],
         help_text=_("Code used for looking up this event programmatically"))
 
     #: Name is the friendly description of an event for use in the admin
@@ -213,7 +226,7 @@ class AbstractCommunicationEventType(models.Model):
             field = getattr(self, attr_name, None)
             if field is not None:
                 # Template content is in a model field
-                templates[name] = Template(field)
+                templates[name] = engines['django'].from_string(field)
             else:
                 # Model field is empty - look for a file template
                 template_name = getattr(self, "%s_file" % attr_name) % code
@@ -230,7 +243,7 @@ class AbstractCommunicationEventType(models.Model):
 
         messages = {}
         for name, template in templates.items():
-            messages[name] = template.render(Context(ctx)) if template else ''
+            messages[name] = template.render(ctx) if template else ''
 
         # Ensure the email subject doesn't contain any newlines
         messages['subject'] = messages['subject'].replace("\n", "")
@@ -248,13 +261,18 @@ class AbstractCommunicationEventType(models.Model):
         return self.category == self.USER_RELATED
 
 
-@python_2_unicode_compatible
 class AbstractNotification(models.Model):
-    recipient = models.ForeignKey(AUTH_USER_MODEL,
-                                  related_name='notifications', db_index=True)
+    recipient = models.ForeignKey(
+        AUTH_USER_MODEL,
+        db_index=True,
+        on_delete=models.CASCADE,
+        related_name='notifications')
 
     # Not all notifications will have a sender.
-    sender = models.ForeignKey(AUTH_USER_MODEL, null=True)
+    sender = models.ForeignKey(
+        AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True)
 
     # HTML is allowed in this field as it can contain links
     subject = models.CharField(max_length=255)
@@ -271,7 +289,7 @@ class AbstractNotification(models.Model):
     location = models.CharField(max_length=32, choices=choices,
                                 default=INBOX)
 
-    date_sent = models.DateTimeField(auto_now_add=True)
+    date_sent = models.DateTimeField(auto_now_add=True, db_index=True)
     date_read = models.DateTimeField(blank=True, null=True)
 
     class Meta:
@@ -298,21 +316,28 @@ class AbstractProductAlert(models.Model):
     """
     An alert for when a product comes back in stock
     """
-    product = models.ForeignKey('catalogue.Product')
+    product = models.ForeignKey(
+        'catalogue.Product',
+        on_delete=models.CASCADE)
 
     # A user is only required if the notification is created by a
     # registered user, anonymous users will only have an email address
     # attached to the notification
-    user = models.ForeignKey(AUTH_USER_MODEL, db_index=True, blank=True,
-                             null=True, related_name="alerts",
-                             verbose_name=_('User'))
+    user = models.ForeignKey(
+        AUTH_USER_MODEL,
+        blank=True,
+        db_index=True,
+        null=True,
+        on_delete=models.CASCADE,
+        related_name="alerts",
+        verbose_name=_('User'))
     email = models.EmailField(_("Email"), db_index=True, blank=True)
 
     # This key are used to confirm and cancel alerts for anon users
     key = models.CharField(_("Key"), max_length=128, blank=True, db_index=True)
 
     # An alert can have two different statuses for authenticated
-    # users ``ACTIVE`` and ``INACTIVE`` and anonymous users have an
+    # users ``ACTIVE`` and ``CANCELLED`` and anonymous users have an
     # additional status ``UNCONFIRMED``. For anonymous users a confirmation
     # and unsubscription key are generated when an instance is saved for
     # the first time and can be used to confirm and unsubscribe the
@@ -351,7 +376,7 @@ class AbstractProductAlert(models.Model):
 
     @property
     def can_be_cancelled(self):
-        return self.status == self.ACTIVE
+        return self.status in (self.ACTIVE, self.UNCONFIRMED)
 
     @property
     def is_cancelled(self):
@@ -399,18 +424,13 @@ class AbstractProductAlert(models.Model):
         if self.status == self.CLOSED and self.date_closed is None:
             self.date_closed = timezone.now()
 
-        return super(AbstractProductAlert, self).save(*args, **kwargs)
+        return super().save(*args, **kwargs)
 
     def get_random_key(self):
-        """
-        Get a random generated key based on SHA-1 and email address
-        """
-        salt = hashlib.sha1(str(random.random()).encode('utf8')).hexdigest()
-        return hashlib.sha1((salt + self.email).encode('utf8')).hexdigest()
+        return get_random_string(length=40, allowed_chars='abcdefghijklmnopqrstuvwxyz0123456789')
 
     def get_confirm_url(self):
         return reverse('customer:alerts-confirm', kwargs={'key': self.key})
 
     def get_cancel_url(self):
-        return reverse('customer:alerts-cancel-by-key', kwargs={'key':
-                                                                self.key})
+        return reverse('customer:alerts-cancel-by-key', kwargs={'key': self.key})

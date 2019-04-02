@@ -2,7 +2,7 @@ import re
 
 from django import forms
 from django.db.models import Q
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from oscar.core.loading import get_model
 
@@ -14,8 +14,10 @@ class RangeForm(forms.ModelForm):
 
     class Meta:
         model = Range
-        exclude = ('included_products', 'slug', 'excluded_products', 'classes',
-                   'proxy_class')
+        fields = [
+            'name', 'description', 'is_public',
+            'includes_all_products', 'included_categories'
+        ]
 
 
 class RangeProductForm(forms.Form):
@@ -29,10 +31,10 @@ class RangeProductForm(forms.Form):
 
     def __init__(self, range, *args, **kwargs):
         self.range = range
-        super(RangeProductForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def clean(self):
-        clean_data = super(RangeProductForm, self).clean()
+        clean_data = super().clean()
         if not clean_data.get('query') and not clean_data.get('file_upload'):
             raise forms.ValidationError(
                 _("You must submit either a list of SKU/UPCs or a file"))
@@ -45,7 +47,7 @@ class RangeProductForm(forms.Form):
 
         # Check that the search matches some products
         ids = set(re.compile(r'[\w-]+').findall(raw))
-        products = self.range.included_products.all()
+        products = self.range.all_products()
         existing_skus = set(products.values_list(
             'stockrecords__partner_sku', flat=True))
         existing_upcs = set(products.values_list('upc', flat=True))
@@ -58,8 +60,8 @@ class RangeProductForm(forms.Form):
                   " this range") % (', '.join(ids)))
 
         self.products = Product._default_manager.filter(
-            Q(stockrecords__partner_sku__in=new_ids) |
-            Q(upc__in=new_ids))
+            Q(stockrecords__partner_sku__in=new_ids)
+            | Q(upc__in=new_ids))
         if len(self.products) == 0:
             raise forms.ValidationError(
                 _("No products exist with a SKU or UPC matching %s")

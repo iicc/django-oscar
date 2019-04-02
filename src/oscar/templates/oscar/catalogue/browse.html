@@ -1,7 +1,6 @@
 {% extends "layout_2_col.html" %}
 
 {% load basket_tags %}
-{% load promotion_tags %}
 {% load category_tags %}
 {% load product_tags %}
 {% load i18n %}
@@ -27,18 +26,20 @@
         <h4>{% trans "Show results for" %}</h4>
         <div class="side_categories">
             <ul class="nav nav-list">
-                {% for tree_category, info in tree_categories %}
+                {% for tree_category in tree_categories %}
                     <li>
-                    {% if tree_category.pk == category.pk %}
-                        <strong>{{ tree_category.name }}</strong>
-                    {% else %}
-                        <a href="{{ tree_category.get_absolute_url }}">{{ tree_category.name }}</a>
-                    {% endif %}
+                        <a href="{{ tree_category.url }}">
+                            {% if tree_category.pk == category.pk %}
+                                <strong>{{ tree_category.name }}</strong>
+                            {% else %}
+                                {{ tree_category.name }}
+                            {% endif %}
+                        </a>
 
-                    {% if info.has_children %}<ul>{% else %}</li>{% endif %}
-                    {% for n in info.num_to_close %}
-                        </ul></li>
-                    {% endfor %}
+                        {% if tree_category.has_children %}<ul>{% else %}</li>{% endif %}
+                        {% for n in tree_category.num_to_close %}
+                            </ul></li>
+                        {% endfor %}
                 {% endfor %}
             </ul>
         </div>
@@ -58,22 +59,22 @@
 {% block content %}
 
     <form method="get" class="form-horizontal">
-        {# Render other search params in a hidden block #}
-        <div style="display:none">
-            {% for value in selected_facets %}
-                <input name="selected_facets" value="{{ value }}" />
-            {% endfor %}
-            {{ form.q }}
-        </div>
+        {# Render other search params as hidden inputs #}
+        {% for value in selected_facets %}
+            <input type="hidden" name="selected_facets" value="{{ value }}" />
+        {% endfor %}
+        <input type="hidden" name="q" value="{{ search_form.q.value|default_if_none:"" }}" />
 
         {% if paginator.count %}
             {% if paginator.num_pages > 1 %}
-                {% blocktrans with start=page_obj.start_index end=page_obj.end_index num_results=paginator.count %}
+                {% blocktrans with start=page_obj.start_index end=page_obj.end_index count num_results=paginator.count %}
+                    <strong>{{ num_results }}</strong> result - showing <strong>{{ start }}</strong> to <strong>{{ end }}</strong>.
+                {% plural %}
                     <strong>{{ num_results }}</strong> results - showing <strong>{{ start }}</strong> to <strong>{{ end }}</strong>.
                 {% endblocktrans %}
             {% else %}
                 {% blocktrans count num_results=paginator.count %}
-                    <strong>1</strong> result.
+                    <strong>{{ num_results }}</strong> result.
                 {% plural %}
                     <strong>{{ num_results }}</strong> results.
                 {% endblocktrans %}

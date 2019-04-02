@@ -1,10 +1,10 @@
-from decimal import Decimal as D
 import datetime
+from decimal import Decimal as D
 
-from oscar.core.loading import get_model
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
-from oscar.core.loading import get_class
+from oscar.core.loading import get_class, get_model
+
 ReportGenerator = get_class('dashboard.reports.reports', 'ReportGenerator')
 ReportCSVFormatter = get_class('dashboard.reports.reports',
                                'ReportCSVFormatter')
@@ -43,12 +43,14 @@ class OfferReportGenerator(ReportGenerator):
     }
 
     def generate(self):
-        discounts = OrderDiscount._default_manager.filter(
-            order__date_placed__gte=self.start_date,
-            order__date_placed__lt=self.end_date + datetime.timedelta(days=1)
-        )
+        qs = OrderDiscount._default_manager.all()
+        if self.start_date:
+            qs = qs.filter(order__date_placed__gte=self.start_date)
+        if self.end_date:
+            qs = qs.filter(order__date_placed__lt=self.end_date + datetime.timedelta(days=1))
+
         offer_discounts = {}
-        for discount in discounts:
+        for discount in qs:
             if discount.offer_id not in offer_discounts:
                 try:
                     all_offers = ConditionalOffer._default_manager
@@ -62,4 +64,4 @@ class OfferReportGenerator(ReportGenerator):
             offer_discounts[discount.offer_id]['total_discount'] \
                 += discount.amount
 
-        return self.formatter.generate_response(offer_discounts.values())
+        return self.formatter.generate_response(list(offer_discounts.values()))

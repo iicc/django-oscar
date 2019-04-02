@@ -1,12 +1,14 @@
 from decimal import Decimal as D
 
-from django.contrib import messages
 from django import http
+from django.contrib import messages
 from django.core.exceptions import ImproperlyConfigured
-from django.core.urlresolvers import reverse
-from django.utils.translation import ugettext_lazy as _
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
 
-from oscar.core.loading import get_model, get_class
+from oscar.core import prices
+from oscar.core.loading import get_class, get_model
+
 from . import exceptions
 
 Repository = get_class('shipping.repository', 'Repository')
@@ -64,7 +66,7 @@ class CheckoutSessionMixin(object):
         except exceptions.PassedSkipCondition as e:
             return http.HttpResponseRedirect(e.url)
 
-        return super(CheckoutSessionMixin, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def check_pre_conditions(self, request):
@@ -120,7 +122,7 @@ class CheckoutSessionMixin(object):
         messages = []
         strategy = request.strategy
         for line in request.basket.all_lines():
-            result = strategy.fetch_for_product(line.product)
+            result = strategy.fetch_for_line(line)
             is_permitted, reason = result.availability.is_purchase_permitted(
                 line.quantity)
             if not is_permitted:
@@ -139,7 +141,7 @@ class CheckoutSessionMixin(object):
             )
 
     def check_user_email_is_captured(self, request):
-        if not request.user.is_authenticated() \
+        if not request.user.is_authenticated \
                 and not self.checkout_session.get_guest_email():
             raise exceptions.FailedPreCondition(
                 url=reverse('checkout:index'),
@@ -232,7 +234,10 @@ class CheckoutSessionMixin(object):
             # It's unusual to get here as a shipping method should be set by
             # the time this skip-condition is called. In the absence of any
             # other evidence, we assume the shipping charge is zero.
-            shipping_charge = D('0.00')
+            shipping_charge = prices.Price(
+                currency=request.basket.currency, excl_tax=D('0.00'),
+                tax=D('0.00')
+            )
         total = self.get_order_totals(request.basket, shipping_charge)
         if total.excl_tax == D('0.00'):
             raise exceptions.PassedSkipCondition(
@@ -244,7 +249,8 @@ class CheckoutSessionMixin(object):
     def get_context_data(self, **kwargs):
         # Use the proposed submission as template context data.  Flatten the
         # order kwargs so they are easily available too.
-        ctx = self.build_submission(**kwargs)
+        ctx = super().get_context_data()
+        ctx.update(self.build_submission(**kwargs))
         ctx.update(kwargs)
         ctx.update(ctx['order_kwargs'])
         return ctx
@@ -257,7 +263,9 @@ class CheckoutSessionMixin(object):
         This can be the right place to perform tax lookups and apply them to
         the basket.
         """
-        basket = kwargs.get('basket', self.request.basket)
+        # Pop the basket if there is one, because we pass it as a positional
+        # argument to methods below
+        basket = kwargs.pop('basket', self.request.basket)
         shipping_address = self.get_shipping_address(basket)
         shipping_method = self.get_shipping_method(
             basket, shipping_address)
@@ -267,7 +275,7 @@ class CheckoutSessionMixin(object):
         else:
             shipping_charge = shipping_method.calculate(basket)
             total = self.get_order_totals(
-                basket, shipping_charge=shipping_charge)
+                basket, shipping_charge=shipping_charge, **kwargs)
         submission = {
             'user': self.request.user,
             'basket': basket,
@@ -292,8 +300,9 @@ class CheckoutSessionMixin(object):
 
         # Set guest email after overrides as we need to update the order_kwargs
         # entry.
-        if (not submission['user'].is_authenticated() and
-                'guest_email' not in submission['order_kwargs']):
+        user = submission['user']
+        if (not user.is_authenticated
+                and 'guest_email' not in submission['order_kwargs']):
             email = self.checkout_session.get_guest_email()
             submission['order_kwargs']['guest_email'] = email
         return submission
@@ -363,8 +372,7 @@ class CheckoutSessionMixin(object):
         to store billing address information. It's also possible to capture
         billing address information as part of the payment details forms, which
         never get stored in the session. In that circumstance, the billing
-        address can be set directly in the build_submission dict (see Oscar's
-        demo site for an example of this approach).
+        address can be set directly in the build_submission dict.
         """
         if not self.checkout_session.is_billing_address_set():
             return None

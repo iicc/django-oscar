@@ -1,24 +1,22 @@
 import logging
 
 from django import http
-from django.shortcuts import redirect
 from django.contrib import messages
 from django.contrib.auth import login
-from django.core.urlresolvers import reverse, reverse_lazy
-from django.utils.translation import ugettext as _
-from django.utils import six
+from django.shortcuts import redirect
+from django.urls import reverse, reverse_lazy
+from django.utils.http import urlquote
+from django.utils.translation import gettext as _
 from django.views import generic
 
-from oscar.apps.shipping.methods import NoShippingRequired
 from oscar.core.loading import get_class, get_classes, get_model
+
 from . import signals
 
-ShippingAddressForm, GatewayForm \
-    = get_classes('checkout.forms', ['ShippingAddressForm', 'GatewayForm'])
-OrderCreator = get_class('order.utils', 'OrderCreator')
+ShippingAddressForm, ShippingMethodForm, GatewayForm \
+    = get_classes('checkout.forms', ['ShippingAddressForm', 'ShippingMethodForm', 'GatewayForm'])
 UserAddressForm = get_class('address.forms', 'UserAddressForm')
 Repository = get_class('shipping.repository', 'Repository')
-AccountAuthView = get_class('customer.views', 'AccountAuthView')
 RedirectRequired, UnableToTakePayment, PaymentError \
     = get_classes('payment.exceptions', ['RedirectRequired',
                                          'UnableToTakePayment',
@@ -26,16 +24,11 @@ RedirectRequired, UnableToTakePayment, PaymentError \
 UnableToPlaceOrder = get_class('order.exceptions', 'UnableToPlaceOrder')
 OrderPlacementMixin = get_class('checkout.mixins', 'OrderPlacementMixin')
 CheckoutSessionMixin = get_class('checkout.session', 'CheckoutSessionMixin')
+NoShippingRequired = get_class('shipping.methods', 'NoShippingRequired')
 Order = get_model('order', 'Order')
 ShippingAddress = get_model('order', 'ShippingAddress')
-CommunicationEvent = get_model('order', 'CommunicationEvent')
-PaymentEventType = get_model('order', 'PaymentEventType')
-PaymentEvent = get_model('order', 'PaymentEvent')
 UserAddress = get_model('address', 'UserAddress')
-Basket = get_model('basket', 'Basket')
-Email = get_model('customer', 'Email')
 Country = get_model('address', 'Country')
-CommunicationEventType = get_model('customer', 'CommunicationEventType')
 
 # Standard logger for checkout events
 logger = logging.getLogger('oscar.checkout')
@@ -56,16 +49,16 @@ class IndexView(CheckoutSessionMixin, generic.FormView):
     def get(self, request, *args, **kwargs):
         # We redirect immediately to shipping address stage if the user is
         # signed in.
-        if request.user.is_authenticated():
+        if request.user.is_authenticated:
             # We raise a signal to indicate that the user has entered the
             # checkout process so analytics tools can track this event.
             signals.start_checkout.send_robust(
                 sender=self, request=request)
             return self.get_success_response()
-        return super(IndexView, self).get(request, *args, **kwargs)
+        return super().get(request, *args, **kwargs)
 
     def get_form_kwargs(self):
-        kwargs = super(IndexView, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         email = self.checkout_session.get_guest_email()
         if email:
             kwargs['initial'] = {
@@ -91,7 +84,7 @@ class IndexView(CheckoutSessionMixin, generic.FormView):
                 self.success_url = "%s?next=%s&email=%s" % (
                     reverse('customer:register'),
                     reverse('checkout:shipping-address'),
-                    email
+                    urlquote(email)
                 )
         else:
             user = form.get_user()
@@ -138,6 +131,7 @@ class ShippingAddressView(CheckoutSessionMixin, generic.FormView):
     def get_initial(self):
         initial = self.checkout_session.new_shipping_address_fields()
         if initial:
+            initial = initial.copy()
             # Convert the primary key stored in the session into a Country
             # instance
             try:
@@ -150,8 +144,8 @@ class ShippingAddressView(CheckoutSessionMixin, generic.FormView):
         return initial
 
     def get_context_data(self, **kwargs):
-        ctx = super(ShippingAddressView, self).get_context_data(**kwargs)
-        if self.request.user.is_authenticated():
+        ctx = super().get_context_data(**kwargs)
+        if self.request.user.is_authenticated:
             # Look up address book data
             ctx['addresses'] = self.get_available_addresses()
         return ctx
@@ -167,7 +161,7 @@ class ShippingAddressView(CheckoutSessionMixin, generic.FormView):
     def post(self, request, *args, **kwargs):
         # Check if a shipping address was selected directly (eg no form was
         # filled in)
-        if self.request.user.is_authenticated() \
+        if self.request.user.is_authenticated \
                 and 'address_id' in self.request.POST:
             address = UserAddress._default_manager.get(
                 pk=self.request.POST['address_id'], user=self.request.user)
@@ -176,16 +170,10 @@ class ShippingAddressView(CheckoutSessionMixin, generic.FormView):
                 # User has selected a previous address to ship to
                 self.checkout_session.ship_to_user_address(address)
                 return redirect(self.get_success_url())
-            elif action == 'delete':
-                # Delete the selected address
-                address.delete()
-                messages.info(self.request, _("Address deleted from your"
-                                              " address book"))
-                return redirect(self.get_success_url())
             else:
                 return http.HttpResponseBadRequest()
         else:
-            return super(ShippingAddressView, self).post(
+            return super().post(
                 request, *args, **kwargs)
 
     def form_valid(self, form):
@@ -194,7 +182,7 @@ class ShippingAddressView(CheckoutSessionMixin, generic.FormView):
             (k, v) for (k, v) in form.instance.__dict__.items()
             if not k.startswith('_'))
         self.checkout_session.ship_to_new_address(address_fields)
-        return super(ShippingAddressView, self).form_valid(form)
+        return super().form_valid(form)
 
 
 class UserAddressUpdateView(CheckoutSessionMixin, generic.UpdateView):
@@ -209,18 +197,18 @@ class UserAddressUpdateView(CheckoutSessionMixin, generic.UpdateView):
         return self.request.user.addresses.all()
 
     def get_form_kwargs(self):
-        kwargs = super(UserAddressUpdateView, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
 
     def get_success_url(self):
         messages.info(self.request, _("Address saved"))
-        return super(UserAddressUpdateView, self).get_success_url()
+        return super().get_success_url()
 
 
 class UserAddressDeleteView(CheckoutSessionMixin, generic.DeleteView):
     """
-    Delete an address from a user's addressbook.
+    Delete an address from a user's address book.
     """
     template_name = 'checkout/user_address_delete.html'
     success_url = reverse_lazy('checkout:shipping-address')
@@ -230,7 +218,7 @@ class UserAddressDeleteView(CheckoutSessionMixin, generic.DeleteView):
 
     def get_success_url(self):
         messages.info(self.request, _("Address deleted"))
-        return super(UserAddressDeleteView, self).get_success_url()
+        return super().get_success_url()
 
 
 # ===============
@@ -238,7 +226,7 @@ class UserAddressDeleteView(CheckoutSessionMixin, generic.DeleteView):
 # ===============
 
 
-class ShippingMethodView(CheckoutSessionMixin, generic.TemplateView):
+class ShippingMethodView(CheckoutSessionMixin, generic.FormView):
     """
     View for allowing a user to choose a shipping method.
 
@@ -251,9 +239,15 @@ class ShippingMethodView(CheckoutSessionMixin, generic.TemplateView):
     the user can choose the appropriate one.
     """
     template_name = 'checkout/shipping_methods.html'
+    form_class = ShippingMethodForm
     pre_conditions = ['check_basket_is_not_empty',
                       'check_basket_is_valid',
                       'check_user_email_is_captured']
+    success_url = reverse_lazy('checkout:payment-method')
+
+    def post(self, request, *args, **kwargs):
+        self._methods = self.get_available_shipping_methods()
+        return super().post(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
         # These pre-conditions can't easily be factored out into the normal
@@ -289,10 +283,15 @@ class ShippingMethodView(CheckoutSessionMixin, generic.TemplateView):
 
         # Must be more than one available shipping method, we present them to
         # the user to make a choice.
-        return super(ShippingMethodView, self).get(request, *args, **kwargs)
+        return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        kwargs = super(ShippingMethodView, self).get_context_data(**kwargs)
+        kwargs = super().get_context_data(**kwargs)
+        kwargs['methods'] = self._methods
+        return kwargs
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
         kwargs['methods'] = self._methods
         return kwargs
 
@@ -309,28 +308,19 @@ class ShippingMethodView(CheckoutSessionMixin, generic.TemplateView):
             shipping_addr=self.get_shipping_address(self.request.basket),
             request=self.request)
 
-    def is_valid_shipping_method(self, method_code):
-        for method in self.get_available_shipping_methods():
-            if method.code == method_code:
-                return True
-        return False
-
-    def post(self, request, *args, **kwargs):
-        # Need to check that this code is valid for this user
-        method_code = request.POST.get('method_code', None)
-        if not self.is_valid_shipping_method(method_code):
-            messages.error(request, _("Your submitted shipping method is not"
-                                      " permitted"))
-            return redirect('checkout:shipping-method')
-
+    def form_valid(self, form):
         # Save the code for the chosen shipping method in the session
         # and continue to the next step.
-        self.checkout_session.use_shipping_method(method_code)
-
+        self.checkout_session.use_shipping_method(form.cleaned_data['method_code'])
         return self.get_success_response()
 
+    def form_invalid(self, form):
+        messages.error(self.request, _("Your submitted shipping method is not"
+                                       " permitted"))
+        return super().form_invalid(form)
+
     def get_success_response(self):
-        return redirect('checkout:payment-method')
+        return redirect(self.get_success_url())
 
 
 # ==============
@@ -352,6 +342,7 @@ class PaymentMethodView(CheckoutSessionMixin, generic.TemplateView):
         'check_user_email_is_captured',
         'check_shipping_data_is_captured']
     skip_conditions = ['skip_unless_payment_is_required']
+    success_url = reverse_lazy('checkout:payment-details')
 
     def get(self, request, *args, **kwargs):
         # By default we redirect straight onto the payment details view. Shops
@@ -360,7 +351,10 @@ class PaymentMethodView(CheckoutSessionMixin, generic.TemplateView):
         return self.get_success_response()
 
     def get_success_response(self):
-        return redirect('checkout:payment-details')
+        return redirect(self.get_success_url())
+
+    def get_success_url(self):
+        return str(self.success_url)
 
 
 # ================
@@ -420,13 +414,13 @@ class PaymentDetailsView(OrderPlacementMixin, generic.TemplateView):
             # The preview view needs to ensure payment information has been
             # correctly captured.
             return self.pre_conditions + ['check_payment_data_is_captured']
-        return super(PaymentDetailsView, self).get_pre_conditions(request)
+        return super().get_pre_conditions(request)
 
     def get_skip_conditions(self, request):
         if not self.preview:
             # Payment details should only be collected if necessary
             return ['skip_unless_payment_is_required']
-        return super(PaymentDetailsView, self).get_skip_conditions(request)
+        return super().get_skip_conditions(request)
 
     def post(self, request, *args, **kwargs):
         # Posting to payment-details isn't the right thing to do.  Form
@@ -509,7 +503,7 @@ class PaymentDetailsView(OrderPlacementMixin, generic.TemplateView):
         Note, this isn't used in core oscar as there is no billing address form
         by default.
         """
-        if not self.request.user.is_authenticated():
+        if not self.request.user.is_authenticated:
             return None
         try:
             return self.request.user.addresses.get(is_default_for_billing=True)
@@ -588,7 +582,7 @@ class PaymentDetailsView(OrderPlacementMixin, generic.TemplateView):
             # their bankcard has expired, wrong card number - that kind of
             # thing. This type of exception is supposed to set a friendly error
             # message that makes sense to the customer.
-            msg = six.text_type(e)
+            msg = str(e)
             logger.warning(
                 "Order #%s: unable to take payment (%s) - restoring basket",
                 order_number, msg)
@@ -605,7 +599,7 @@ class PaymentDetailsView(OrderPlacementMixin, generic.TemplateView):
             # It makes sense to configure the checkout logger to
             # mail admins on an error as this issue warrants some further
             # investigation.
-            msg = six.text_type(e)
+            msg = str(e)
             logger.error("Order #%s: payment error (%s)", order_number, msg,
                          exc_info=True)
             self.restore_frozen_basket()
@@ -635,7 +629,7 @@ class PaymentDetailsView(OrderPlacementMixin, generic.TemplateView):
             # actually place an order.  Not a good situation to be in as a
             # payment transaction may already have taken place, but needs
             # to be handled gracefully.
-            msg = six.text_type(e)
+            msg = str(e)
             logger.error("Order #%s: unable to place order - %s",
                          order_number, msg, exc_info=True)
             self.restore_frozen_basket()
@@ -678,3 +672,16 @@ class ThankYouView(generic.DetailView):
                 raise http.Http404(_("No order found"))
 
         return order
+
+    def get_context_data(self, *args, **kwargs):
+        ctx = super().get_context_data(*args, **kwargs)
+        # Remember whether this view has been loaded.
+        # Only send tracking information on the first load.
+        key = 'order_{}_thankyou_viewed'.format(ctx['order'].pk)
+        if not self.request.session.get(key, False):
+            self.request.session[key] = True
+            ctx['send_analytics_event'] = True
+        else:
+            ctx['send_analytics_event'] = False
+
+        return ctx

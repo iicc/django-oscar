@@ -1,7 +1,7 @@
-from oscar.core.loading import is_model_registered
+from oscar.apps.address.abstract_models import (
+    AbstractBillingAddress, AbstractShippingAddress)
 from oscar.apps.order.abstract_models import *  # noqa
-from oscar.apps.address.abstract_models import (AbstractShippingAddress,
-                                                AbstractBillingAddress)
+from oscar.core.loading import is_model_registered
 
 __all__ = ['PaymentEventQuantity', 'ShippingEventQuantity']
 
@@ -18,6 +18,13 @@ if not is_model_registered('order', 'OrderNote'):
         pass
 
     __all__.append('OrderNote')
+
+
+if not is_model_registered('order', 'OrderStatusChange'):
+    class OrderStatusChange(AbstractOrderStatusChange):
+        pass
+
+    __all__.append('OrderStatusChange')
 
 
 if not is_model_registered('order', 'CommunicationEvent'):

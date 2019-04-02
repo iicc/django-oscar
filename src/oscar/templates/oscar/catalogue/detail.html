@@ -10,7 +10,7 @@
 {% load purchase_info_tags %}
 
 {% block title %}
-    {{ product.title }} | {{ block.super }}
+    {{ product.get_title }} | {{ block.super }}
 {% endblock %}
 
 {% block description %}
@@ -28,7 +28,7 @@
             <a href="{{ c.get_absolute_url }}">{{ c.name }}</a>
         </li>
         {% endfor %}
-        <li class="active">{{ product.title }}</li>
+        <li class="active">{{ product.get_title }}</li>
 
         {% get_back_button as backbutton %}
         {% if backbutton %}
@@ -60,10 +60,10 @@
         {% block product_main %}
         <div class="col-sm-6 product_main">
             {% comment %}
-            This is a but clunky here.  Better to have some kind of JS-driven dashboard menu that 
+            This is a but clunky here.  Better to have some kind of JS-driven dashboard menu that
             pops out when clicked.  A bit like the Django-Debug-Toolbar button
             {% endcomment %}
-            {% if user.is_authenticated and user.is_staff %}
+            {% if user.is_staff %}
                 <a class="pull-right hidden-xs" href="{% url 'dashboard:catalogue-product' pk=product.id %}"><small><i class="icon-edit"></i> {% trans "Edit this product" %}</small></a>
             {% endif %}
             <h1>{{ product.get_title }}</h1>
@@ -78,9 +78,21 @@
 
             <hr/>
 
-            {% block product_basket_form %}
-                {% include "catalogue/partials/add_to_basket_form.html" %}
-            {% endblock %}
+            {% if not product.is_parent %}
+                {% block product_basket_form %}
+                    {% include "catalogue/partials/add_to_basket_form.html" %}
+                {% endblock %}
+            {% else %}
+                {% block variants %}
+                    <h2>{% trans 'Variants:' %}</h2>
+                    {% for child in product.children.all %}
+                        {% purchase_info_for_product request child as child_session %}
+                        {% if child_session.availability.is_available_to_buy %}
+                            <a href="{{ child.get_absolute_url }}">{{ child.get_title }}</a><br>
+                        {% endif %}
+                    {% endfor %}
+                {% endblock %}
+            {% endif %}
         </div><!-- /col-sm-6 -->
         {% endblock %}
 
@@ -165,7 +177,7 @@
                 </p>
             {% else %}
                 <ol class="list-unstyled review-list">
-                    {% for review in reviews|slice:":3" %}
+                    {% for review in product.reviews.approved.all|slice:":3" %}
                         <li>
                         {% include 'catalogue/partials/review.html' %}
                         </li>
@@ -176,7 +188,7 @@
         {% endblock product_review %}
     {% endiffeature %}
 
-    {% with recommended_products=product.recommended_products.all|slice:":6" %}
+    {% with recommended_products=product.sorted_recommended_products|slice:":6" %}
         {% if recommended_products %}
             <div class="sub-header">
                 <h2>{% trans "Recommended items" %}</h2>
@@ -191,7 +203,7 @@
         {% endif %}
     {% endwith %}
 
-    {% recently_viewed_products %}
+    {% recently_viewed_products current_product=product %}
 
 </article><!-- End of product page -->
 {% endblock content %}

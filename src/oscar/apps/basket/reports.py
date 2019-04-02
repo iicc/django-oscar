@@ -1,6 +1,7 @@
-from oscar.core.loading import get_model
-from django.utils.translation import ugettext_lazy as _
-from oscar.core.loading import get_class
+from django.utils.translation import gettext_lazy as _
+
+from oscar.core.loading import get_class, get_model
+
 
 ReportGenerator = get_class('dashboard.reports.reports', 'ReportGenerator')
 ReportCSVFormatter = get_class('dashboard.reports.reports',
@@ -37,7 +38,7 @@ class OpenBasketReportCSVFormatter(ReportCSVFormatter):
                 row = [basket.owner_id, None, None, basket.status,
                        basket.num_lines, basket.num_items,
                        self.format_datetime(basket.date_created),
-                       basket.time_since_creation]
+                       self.format_timedelta(basket.time_since_creation)]
             writer.writerow(row)
 
     def filename(self, **kwargs):

@@ -1,71 +1,35 @@
 from django import forms
 from django.core import exceptions
-from django.forms.models import inlineformset_factory
-from django.utils.translation import ugettext_lazy as _
-from treebeard.forms import MoveNodeForm, movenodeform_factory
+from django.utils.translation import gettext_lazy as _
+from treebeard.forms import movenodeform_factory
 
+from oscar.core.loading import get_class, get_model, get_classes
 from oscar.core.utils import slugify
-from oscar.core.loading import get_class, get_model
-from oscar.forms.widgets import ImageInput
+from oscar.forms.widgets import DateTimePickerInput, ImageInput
 
 Product = get_model('catalogue', 'Product')
 ProductClass = get_model('catalogue', 'ProductClass')
+ProductAttribute = get_model('catalogue', 'ProductAttribute')
 Category = get_model('catalogue', 'Category')
 StockRecord = get_model('partner', 'StockRecord')
 ProductCategory = get_model('catalogue', 'ProductCategory')
 ProductImage = get_model('catalogue', 'ProductImage')
 ProductRecommendation = get_model('catalogue', 'ProductRecommendation')
+AttributeOptionGroup = get_model('catalogue', 'AttributeOptionGroup')
+AttributeOption = get_model('catalogue', 'AttributeOption')
+Option = get_model('catalogue', 'Option')
 ProductSelect = get_class('dashboard.catalogue.widgets', 'ProductSelect')
-ProductSelectMultiple = get_class('dashboard.catalogue.widgets',
-                                  'ProductSelectMultiple')
+(RelatedFieldWidgetWrapper,
+ RelatedMultipleFieldWidgetWrapper) = get_classes('dashboard.widgets',
+                                                  ('RelatedFieldWidgetWrapper',
+                                                   'RelatedMultipleFieldWidgetWrapper'))
 
-
-class BaseCategoryForm(MoveNodeForm):
-
-    def clean(self):
-        cleaned_data = super(BaseCategoryForm, self).clean()
-
-        name = cleaned_data.get('name')
-        ref_node_pk = cleaned_data.get('_ref_node_id')
-        pos = cleaned_data.get('_position')
-
-        if name and self.is_slug_conflicting(name, ref_node_pk, pos):
-            raise forms.ValidationError(
-                _('Category with the given path already exists.'))
-        return cleaned_data
-
-    def is_slug_conflicting(self, name, ref_node_pk, position):
-        # determine parent
-        if ref_node_pk:
-            ref_category = Category.objects.get(pk=ref_node_pk)
-            if position == 'first-child':
-                parent = ref_category
-            else:
-                parent = ref_category.get_parent()
-        else:
-            parent = None
-
-        # build full slug
-        slug_prefix = ''
-        if parent:
-            slug_prefix = (parent.slug + Category._slug_separator)
-        slug = '%s%s' % (slug_prefix, slugify(name))
-
-        # check if slug is conflicting
-        try:
-            category = Category.objects.get(slug=slug)
-        except Category.DoesNotExist:
-            pass
-        else:
-            if category.pk != self.instance.pk:
-                return True
-        return False
-
-CategoryForm = movenodeform_factory(Category, form=BaseCategoryForm)
+CategoryForm = movenodeform_factory(
+    Category,
+    fields=['name', 'description', 'image'])
 
 
 class ProductClassSelectForm(forms.Form):
-
     """
     Form which is used before creating a product to select it's product class
     """
@@ -79,7 +43,7 @@ class ProductClassSelectForm(forms.Form):
         """
         If there's only one product class, pre-select it
         """
-        super(ProductClassSelectForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         qs = self.fields['product_class'].queryset
         if not kwargs.get('initial') and len(qs) == 1:
             self.fields['product_class'].initial = qs[0]
@@ -91,7 +55,7 @@ class ProductSearchForm(forms.Form):
         max_length=255, required=False, label=_('Product title'))
 
     def clean(self):
-        cleaned_data = super(ProductSearchForm, self).clean()
+        cleaned_data = super().clean()
         cleaned_data['upc'] = cleaned_data['upc'].strip()
         cleaned_data['title'] = cleaned_data['title'].strip()
         return cleaned_data
@@ -103,77 +67,29 @@ class StockRecordForm(forms.ModelForm):
         # The user kwarg is not used by stock StockRecordForm. We pass it
         # anyway in case one wishes to customise the partner queryset
         self.user = user
-        super(StockRecordForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
+
+        # Restrict accessible partners for non-staff users
+        if not self.user.is_staff:
+            self.fields['partner'].queryset = self.user.partners.all()
 
         # If not tracking stock, we hide the fields
         if not product_class.track_stock:
-            del self.fields['num_in_stock']
-            del self.fields['low_stock_threshold']
+            for field_name in ['num_in_stock', 'low_stock_threshold']:
+                if field_name in self.fields:
+                    del self.fields[field_name]
         else:
-            self.fields['price_excl_tax'].required = True
-            self.fields['num_in_stock'].required = True
+            for field_name in ['price_excl_tax', 'num_in_stock']:
+                if field_name in self.fields:
+                    self.fields[field_name].required = True
 
     class Meta:
         model = StockRecord
-        exclude = ('product', 'num_allocated')
-
-
-BaseStockRecordFormSet = inlineformset_factory(
-    Product, StockRecord, form=StockRecordForm, extra=1)
-
-
-class StockRecordFormSet(BaseStockRecordFormSet):
-
-    def __init__(self, product_class, user, *args, **kwargs):
-        self.user = user
-        self.require_user_stockrecord = not user.is_staff
-        self.product_class = product_class
-        super(StockRecordFormSet, self).__init__(*args, **kwargs)
-        self.set_initial_data()
-
-    def set_initial_data(self):
-        """
-        If user has only one partner associated, set the first
-        stock record's partner to it. Can't pre-select for staff users as
-        they're allowed to save a product without a stock record.
-
-        This is intentionally done after calling __init__ as passing initial
-        data to __init__ creates a form for each list item. So depending on
-        whether we can pre-select the partner or not, we'd end up with 1 or 2
-        forms for an unbound form.
-        """
-        if self.require_user_stockrecord:
-            try:
-                user_partner = self.user.partners.get()
-            except (exceptions.ObjectDoesNotExist,
-                    exceptions.MultipleObjectsReturned):
-                pass
-            else:
-                partner_field = self.forms[0].fields.get('partner', None)
-                if partner_field and partner_field.initial is None:
-                    partner_field.initial = user_partner
-
-    def _construct_form(self, i, **kwargs):
-        kwargs['product_class'] = self.product_class
-        kwargs['user'] = self.user
-        return super(StockRecordFormSet, self)._construct_form(
-            i, **kwargs)
-
-    def clean(self):
-        """
-        If the user isn't a staff user, this validation ensures that at least
-        one stock record's partner is associated with a users partners.
-        """
-        if any(self.errors):
-            return
-        if self.require_user_stockrecord:
-            stockrecord_partners = set([form.cleaned_data.get('partner', None)
-                                        for form in self.forms])
-            user_partners = set(self.user.partners.all())
-            if not user_partners & stockrecord_partners:
-                raise exceptions.ValidationError(
-                    _("At least one stock record must be set to a partner that"
-                      "you're associated with."))
+        fields = [
+            'partner', 'partner_sku',
+            'price_currency', 'price_excl_tax', 'price_retail', 'cost_price',
+            'num_in_stock', 'low_stock_threshold',
+        ]
 
 
 def _attr_text_field(attribute):
@@ -206,6 +122,12 @@ def _attr_date_field(attribute):
     return forms.DateField(label=attribute.name,
                            required=attribute.required,
                            widget=forms.widgets.DateInput)
+
+
+def _attr_datetime_field(attribute):
+    return forms.DateTimeField(label=attribute.name,
+                               required=attribute.required,
+                               widget=DateTimePickerInput())
 
 
 def _attr_option_field(attribute):
@@ -253,6 +175,7 @@ class ProductForm(forms.ModelForm):
         "boolean": _attr_boolean_field,
         "float": _attr_float_field,
         "date": _attr_date_field,
+        "datetime": _attr_datetime_field,
         "option": _attr_option_field,
         "multi_option": _attr_multi_option_field,
         "entity": _attr_entity_field,
@@ -264,14 +187,14 @@ class ProductForm(forms.ModelForm):
     class Meta:
         model = Product
         fields = [
-            'title', 'upc', 'description', 'is_discountable', 'structure']
+            'title', 'upc', 'description', 'is_public', 'is_discountable', 'structure']
         widgets = {
             'structure': forms.HiddenInput()
         }
 
     def __init__(self, product_class, data=None, parent=None, *args, **kwargs):
         self.set_initial(product_class, parent, kwargs)
-        super(ProductForm, self).__init__(data, *args, **kwargs)
+        super().__init__(data, *args, **kwargs)
         if parent:
             self.instance.parent = parent
             # We need to set the correct product structures explicitly to pass
@@ -352,14 +275,14 @@ class ProductForm(forms.ModelForm):
         Set attributes before ModelForm calls the product's clean method
         (which it does in _post_clean), which in turn validates attributes.
         """
-        product_class = self.instance.get_product_class()
-        for attribute in product_class.attributes.all():
+        self.instance.attr.initiate_attributes()
+        for attribute in self.instance.attr.get_all_attributes():
             field_name = 'attr_%s' % attribute.code
             # An empty text field won't show up in cleaned_data.
             if field_name in self.cleaned_data:
                 value = self.cleaned_data[field_name]
                 setattr(self.instance.attr, attribute.code, value)
-        super(ProductForm, self)._post_clean()
+        super()._post_clean()
 
 
 class StockAlertSearchForm(forms.Form):
@@ -373,42 +296,11 @@ class ProductCategoryForm(forms.ModelForm):
         fields = ('category', )
 
 
-BaseProductCategoryFormSet = inlineformset_factory(
-    Product, ProductCategory, form=ProductCategoryForm, extra=1,
-    can_delete=True)
-
-
-class ProductCategoryFormSet(BaseProductCategoryFormSet):
-
-    def __init__(self, product_class, user, *args, **kwargs):
-        # This function just exists to drop the extra arguments
-        super(ProductCategoryFormSet, self).__init__(*args, **kwargs)
-
-    def clean(self):
-        if not self.instance.is_child and self.get_num_categories() == 0:
-            raise forms.ValidationError(
-                _("Stand-alone and parent products "
-                  "must have at least one category"))
-        if self.instance.is_child and self.get_num_categories() > 0:
-            raise forms.ValidationError(
-                _("A child product should not have categories"))
-
-    def get_num_categories(self):
-        num_categories = 0
-        for i in range(0, self.total_form_count()):
-            form = self.forms[i]
-            if (hasattr(form, 'cleaned_data')
-                    and form.cleaned_data.get('category', None)
-                    and not form.cleaned_data.get('DELETE', False)):
-                num_categories += 1
-        return num_categories
-
-
 class ProductImageForm(forms.ModelForm):
 
     class Meta:
         model = ProductImage
-        exclude = ('display_order',)
+        fields = ['product', 'original', 'caption']
         # use ImageInput widget to create HTML displaying the
         # actual uploaded image and providing the upload dialog
         # when clicking on the actual image.
@@ -420,23 +312,13 @@ class ProductImageForm(forms.ModelForm):
         # We infer the display order of the image based on the order of the
         # image fields within the formset.
         kwargs['commit'] = False
-        obj = super(ProductImageForm, self).save(*args, **kwargs)
+        obj = super().save(*args, **kwargs)
         obj.display_order = self.get_display_order()
         obj.save()
         return obj
 
     def get_display_order(self):
         return self.prefix.split('-').pop()
-
-
-BaseProductImageFormSet = inlineformset_factory(
-    Product, ProductImage, form=ProductImageForm, extra=2)
-
-
-class ProductImageFormSet(BaseProductImageFormSet):
-
-    def __init__(self, product_class, user, *args, **kwargs):
-        super(ProductImageFormSet, self).__init__(*args, **kwargs)
 
 
 class ProductRecommendationForm(forms.ModelForm):
@@ -449,19 +331,64 @@ class ProductRecommendationForm(forms.ModelForm):
         }
 
 
-BaseProductRecommendationFormSet = inlineformset_factory(
-    Product, ProductRecommendation, form=ProductRecommendationForm,
-    extra=5, fk_name="primary")
-
-
-class ProductRecommendationFormSet(BaseProductRecommendationFormSet):
-
-    def __init__(self, product_class, user, *args, **kwargs):
-        super(ProductRecommendationFormSet, self).__init__(*args, **kwargs)
-
-
 class ProductClassForm(forms.ModelForm):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        remote_field = self._meta.model._meta.get_field('options').remote_field
+        self.fields["options"].widget = RelatedMultipleFieldWidgetWrapper(
+            self.fields["options"].widget, remote_field)
 
     class Meta:
         model = ProductClass
         fields = ['name', 'requires_shipping', 'track_stock', 'options']
+
+
+class ProductAttributesForm(forms.ModelForm):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # because we'll allow submission of the form with blank
+        # codes so that we can generate them.
+        self.fields["code"].required = False
+
+        self.fields["option_group"].help_text = _("Select an option group")
+
+        remote_field = self._meta.model._meta.get_field('option_group').remote_field
+        self.fields["option_group"].widget = RelatedFieldWidgetWrapper(
+            self.fields["option_group"].widget, remote_field)
+
+    def clean_code(self):
+        code = self.cleaned_data.get("code")
+        title = self.cleaned_data.get("name")
+
+        if not code and title:
+            code = slugify(title)
+
+        return code
+
+    class Meta:
+        model = ProductAttribute
+        fields = ["name", "code", "type", "option_group", "required"]
+
+
+class AttributeOptionGroupForm(forms.ModelForm):
+
+    class Meta:
+        model = AttributeOptionGroup
+        fields = ['name']
+
+
+class AttributeOptionForm(forms.ModelForm):
+
+    class Meta:
+        model = AttributeOption
+        fields = ['option']
+
+
+class OptionForm(forms.ModelForm):
+
+    class Meta:
+        model = Option
+        fields = ['name', 'type']

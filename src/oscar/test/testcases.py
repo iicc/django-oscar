@@ -1,12 +1,11 @@
-from django.utils.six.moves import http_client
+from http import client as http_client
 
-from django.core.urlresolvers import reverse
 from django.contrib.auth.models import Permission
+from django.urls import reverse
 from django_webtest import WebTest
 from purl import URL
 
 from oscar.core.compat import get_user_model
-
 
 User = get_user_model()
 
@@ -52,7 +51,9 @@ class WebTestCase(WebTest):
         if exists.
         """
         kwargs = {'email': email, 'password': password}
-        if 'username' in User._meta.get_all_field_names():
+        fields = {f.name: f for f in User._meta.get_fields()}
+
+        if 'username' in fields:
             kwargs['username'] = username
         return User.objects.create_user(**kwargs)
 
@@ -73,21 +74,26 @@ class WebTestCase(WebTest):
             location = URL.from_string(response['Location'])
             self.assertEqual(expected_url, location.path())
 
-    def assertRedirectsTo(self, response, url_name):
-        self.assertTrue(str(response.status_code).startswith('3'))
+    def assertIsNotRedirect(self, response):
+        self.assertIsOk(response)
+        self.assertTrue(response.status_code not in (
+            http_client.FOUND, http_client.MOVED_PERMANENTLY
+        ))
+
+    def assertRedirectsTo(self, response, url_name, kwargs=None):
+        """
+        Asserts that a response is a redirect to a given URL name.
+        """
+        self.assertIsRedirect(response)
         location = response.headers['Location']
-        redirect_path = location.replace('http://localhost:80', '')
-        self.assertEqual(reverse(url_name), redirect_path)
+        for unwanted in ['http://localhost:80', 'http://testserver']:
+            location = location.replace(unwanted, '')
+        self.assertEqual(reverse(url_name, kwargs=kwargs), location)
 
     def assertNoAccess(self, response):
         self.assertContext(response)
         self.assertTrue(response.status_code in (http_client.NOT_FOUND,
                                                  http_client.FORBIDDEN))
-
-    def assertRedirectUrlName(self, response, name, kwargs=None):
-        self.assertIsRedirect(response)
-        location = response['Location'].replace('http://testserver', '')
-        self.assertEqual(location, reverse(name, kwargs=kwargs))
 
     def assertIsOk(self, response):
         self.assertEqual(http_client.OK, response.status_code)
@@ -100,3 +106,8 @@ class WebTestCase(WebTest):
         self.assertContext(response)
         self.assertTrue(key in response.context,
                         "Context should contain a variable '%s'" % key)
+
+    def assertNotInContext(self, response, key):
+        self.assertContext(response)
+        self.assertTrue(key not in response.context,
+                        "Context should not contain a variable '%s'" % key)

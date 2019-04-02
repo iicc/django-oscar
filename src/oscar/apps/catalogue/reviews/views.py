@@ -1,16 +1,17 @@
-from django.shortcuts import get_object_or_404, redirect
-from django.views.generic import ListView, DetailView, CreateView, View
+from django.conf import settings
 from django.contrib import messages
-from oscar.core.loading import get_model
-from django.utils.translation import ugettext_lazy as _
+from django.shortcuts import get_object_or_404, redirect
+from django.utils.translation import gettext_lazy as _
+from django.views.generic import CreateView, DetailView, ListView, View
 
-from oscar.core.loading import get_classes
-from oscar.core.utils import redirect_to_referrer
 from oscar.apps.catalogue.reviews.signals import review_added
+from oscar.core.loading import get_classes, get_model
+from oscar.core.utils import redirect_to_referrer
 
 ProductReviewForm, VoteForm, SortReviewsForm = get_classes(
     'catalogue.reviews.forms',
     ['ProductReviewForm', 'VoteForm', 'SortReviewsForm'])
+
 Vote = get_model('reviews', 'vote')
 ProductReview = get_model('reviews', 'ProductReview')
 Product = get_model('catalogue', 'product')
@@ -35,22 +36,22 @@ class CreateProductReview(CreateView):
             messages.warning(self.request, message)
             return redirect(self.product.get_absolute_url())
 
-        return super(CreateProductReview, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        context = super(CreateProductReview, self).get_context_data(**kwargs)
+        context = super().get_context_data(**kwargs)
         context['product'] = self.product
         return context
 
     def get_form_kwargs(self):
-        kwargs = super(CreateProductReview, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         kwargs['product'] = self.product
         kwargs['user'] = self.request.user
         return kwargs
 
     def form_valid(self, form):
-        response = super(CreateProductReview, self).form_valid(form)
+        response = super().form_valid(form)
         self.send_signal(self.request, response, self.object)
         return response
 
@@ -70,7 +71,7 @@ class ProductReviewDetail(DetailView):
     model = ProductReview
 
     def get_context_data(self, **kwargs):
-        context = super(ProductReviewDetail, self).get_context_data(**kwargs)
+        context = super().get_context_data(**kwargs)
         context['product'] = get_object_or_404(
             Product, pk=self.kwargs['product_pk'])
         return context
@@ -99,7 +100,7 @@ class AddVoteView(View):
             for error_list in form.errors.values():
                 for msg in error_list:
                     messages.error(request, msg)
-        return redirect_to_referrer(request.META, product.get_absolute_url())
+        return redirect_to_referrer(request, product.get_absolute_url())
 
 
 class ProductReviewList(ListView):
@@ -110,19 +111,19 @@ class ProductReviewList(ListView):
     context_object_name = "reviews"
     model = ProductReview
     product_model = Product
-    paginate_by = 20
+    paginate_by = settings.OSCAR_REVIEWS_PER_PAGE
 
     def get_queryset(self):
-        qs = self.model.approved.filter(product=self.kwargs['product_pk'])
+        qs = self.model.objects.approved().filter(product=self.kwargs['product_pk'])
         self.form = SortReviewsForm(self.request.GET)
-        if self.form.is_valid():
+        if self.request.GET and self.form.is_valid():
             sort_by = self.form.cleaned_data['sort_by']
             if sort_by == SortReviewsForm.SORT_BY_RECENCY:
                 return qs.order_by('-date_created')
         return qs.order_by('-score')
 
     def get_context_data(self, **kwargs):
-        context = super(ProductReviewList, self).get_context_data(**kwargs)
+        context = super().get_context_data(**kwargs)
         context['product'] = get_object_or_404(
             self.product_model, pk=self.kwargs['product_pk'])
         context['form'] = self.form

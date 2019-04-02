@@ -1,6 +1,7 @@
 from collections import Counter
 
 from django.core.management.base import BaseCommand
+
 from oscar.core.compat import get_user_model
 
 User = get_user_model()
@@ -23,6 +24,6 @@ class Command(BaseCommand):
                     "{} (#{})".format(user.get_username(), user.pk)
                     for user in users]
                 print("{email} is assigned to: {pk_list}".format(
-                    email=email, pk_list=u", ".join(user_strings)))
+                    email=email, pk_list=", ".join(user_strings)))
         else:
             print("No duplicate email addresses found!")

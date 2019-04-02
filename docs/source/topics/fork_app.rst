@@ -8,7 +8,8 @@ This guide explains how to fork an app in Oscar.
 
   The following steps are now automated by the ``oscar_fork_app`` management
   command. They're explained in detail so you get an idea of what's going on.
-  But there's no need to do this manually anymore!
+  But there's no need to do this manually anymore! More information is
+  available in :ref:`fork-oscar-app`.
 
 Create Python module with same label
 ====================================
@@ -37,9 +38,9 @@ If two models with the same name are declared within an app, Django will only
 use the first one. That means that if you wish to customise Oscar's models, you
 must declare your custom ones before importing Oscar's models for that app.
 
-If you're using South, you have to copy the ``migrations`` directory
-from ``oscar/apps/order`` and put it into your ``order`` app. Detailed
-instructions are available in :doc:`/howto/how_to_customise_models`.
+You have to copy the ``migrations`` directory from ``oscar/apps/order`` and put
+it into your ``order`` app. Detailed instructions are available in
+:doc:`/howto/how_to_customise_models`.
 
 Get the Django admin working
 ============================
@@ -53,22 +54,22 @@ the core app's ``admin.py`` (which will run the register code)::
 
 This isn't great but we haven't found a better way as of yet.
 
-Django 1.7+: Use supplied app config
-====================================
+Use supplied app config
+=======================
 
 Oscar ships with an app config for each app, which sets app labels and
 runs startup code. You need to make sure that happens.
 
 .. code-block: django
 
-    # yourproject/order/config.py
+    # yourproject/order/apps.py
 
-    from oscar.apps.order import config
+    from oscar.apps.order import apps
 
 
-    class OrderConfig(config.OrderConfig):
+    class OrderConfig(apps.OrderConfig):
         name = 'yourproject.order'
 
     # yourproject/order/__init__.py
 
-    default_app_config = 'yourproject.order.config.OrderConfig'
+    default_app_config = 'yourproject.order.apps.OrderConfig'

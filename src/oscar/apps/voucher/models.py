@@ -1,10 +1,14 @@
-import django
-
-from oscar.core.loading import is_model_registered
 from oscar.apps.voucher.abstract_models import (
-    AbstractVoucher, AbstractVoucherApplication)
+    AbstractVoucher, AbstractVoucherApplication, AbstractVoucherSet)
+from oscar.core.loading import is_model_registered
 
 __all__ = []
+
+if not is_model_registered('voucher', 'VoucherSet'):
+    class VoucherSet(AbstractVoucherSet):
+        pass
+
+    __all__.append('VoucherSet')
 
 
 if not is_model_registered('voucher', 'Voucher'):
@@ -19,7 +23,3 @@ if not is_model_registered('voucher', 'VoucherApplication'):
         pass
 
     __all__.append('VoucherApplication')
-
-
-if django.VERSION < (1, 7):
-    from . import receivers  # noqa

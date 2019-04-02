@@ -1,6 +1,8 @@
 from django import forms
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import pgettext_lazy
+
 from oscar.core.loading import get_model
-from django.utils.translation import ugettext_lazy as _, pgettext_lazy
 from oscar.core.validators import URLDoesNotExistValidator
 
 FlatPage = get_model('flatpages', 'FlatPage')
@@ -11,7 +13,7 @@ class PageSearchForm(forms.Form):
     Search form to filter pages by *title.
     """
     title = forms.CharField(
-        required=False, label=pgettext_lazy(u"Page title", u"Title"))
+        required=False, label=pgettext_lazy("Page title", "Title"))
 
 
 class PageUpdateForm(forms.ModelForm):
@@ -20,8 +22,19 @@ class PageUpdateForm(forms.ModelForm):
     and *content* field. The specified URL will be validated and check if
     the same URL already exists in the system.
     """
-    url = forms.CharField(max_length=128, required=False, label=_("URL"),
-                          help_text=_("Example: '/about/contact/'."))
+    url = forms.RegexField(
+        label=_("URL"),
+        max_length=100,
+        regex=r'^[-\w/\.~]+$',
+        required=False,
+        help_text=_("Example: '/about/contact/'."),
+        error_messages={
+            "invalid": _(
+                "This value must contain only letters, numbers, dots, "
+                "underscores, dashes, slashes or tildes."
+            ),
+        },
+    )
 
     def clean_url(self):
         """

@@ -1,30 +1,12 @@
-from django.core.paginator import Paginator, InvalidPage
-from django.utils.translation import ugettext_lazy as _
-
+from django.core.paginator import InvalidPage, Paginator
+from django.utils.translation import gettext_lazy as _
 from haystack import connections
 
 from oscar.core.loading import get_class
+
 from . import facets
 
-
 FacetMunger = get_class('search.facets', 'FacetMunger')
-
-# Workaround for pysolr 3.1 not supporting and failing hard on
-# Solr 4.0 error messages
-# https://github.com/toastdriven/pysolr/pull/127
-# https://github.com/toastdriven/pysolr/pull/113
-# TODO: Remove in Oscar 0.9
-try:
-    import pysolr
-except ImportError:
-    pass
-else:
-    if pysolr.__version__[:2] < (3, 2):
-        import logging
-        logger = logging.getLogger()
-        logger.warning(
-            "You're running an old version of pysolr that is causing issues "
-            "with Oscar. Please upgrade to 3.2 or higher.")
 
 
 class SearchHandler(object):
@@ -81,7 +63,7 @@ class SearchHandler(object):
         """
         return search_form.search()
 
-    def get_search_form(self, request_data, search_queryset):
+    def get_search_form(self, request_data, search_queryset, **form_kwargs):
         """
         Return a bound version of Haystack's search form.
         """
@@ -90,6 +72,7 @@ class SearchHandler(object):
             'selected_facets': request_data.getlist("selected_facets"),
             'searchqueryset': search_queryset
         }
+        kwargs.update(**form_kwargs)
         return self.form_class(**kwargs)
 
     def get_search_queryset(self):

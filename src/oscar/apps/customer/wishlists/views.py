@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 from django.contrib import messages
 from django.core.exceptions import (
-    ObjectDoesNotExist, MultipleObjectsReturned, PermissionDenied)
-from django.core.urlresolvers import reverse
+    MultipleObjectsReturned, ObjectDoesNotExist, PermissionDenied)
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
-from django.views.generic import (ListView, CreateView, UpdateView, DeleteView,
-                                  View, FormView)
-from django.utils.translation import ugettext_lazy as _
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
+from django.views.generic import (
+    CreateView, DeleteView, FormView, ListView, UpdateView, View)
 
-from oscar.core.loading import get_class, get_classes, get_model
+from oscar.core.loading import get_class, get_model
 from oscar.core.utils import redirect_to_referrer, safe_referrer
 
 WishList = get_model('wishlists', 'WishList')
 Line = get_model('wishlists', 'Line')
 Product = get_model('catalogue', 'Product')
-WishListForm, LineFormset = get_classes('wishlists.forms',
-                                        ['WishListForm', 'LineFormset'])
+WishListForm = get_class('wishlists.forms', 'WishListForm')
+LineFormset = get_class('wishlists.formsets', 'LineFormset')
 PageTitleMixin = get_class('customer.mixins', 'PageTitleMixin')
 
 
@@ -43,8 +43,7 @@ class WishListDetailView(PageTitleMixin, FormView):
 
     def dispatch(self, request, *args, **kwargs):
         self.object = self.get_wishlist_or_404(kwargs['key'], request.user)
-        return super(WishListDetailView, self).dispatch(request, *args,
-                                                        **kwargs)
+        return super().dispatch(request, *args, **kwargs)
 
     def get_wishlist_or_404(self, key, user):
         wishlist = get_object_or_404(WishList, key=key)
@@ -57,12 +56,12 @@ class WishListDetailView(PageTitleMixin, FormView):
         return self.object.name
 
     def get_form_kwargs(self):
-        kwargs = super(WishListDetailView, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         kwargs['instance'] = self.object
         return kwargs
 
     def get_context_data(self, **kwargs):
-        ctx = super(WishListDetailView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['wishlist'] = self.object
         other_wishlists = self.request.user.wishlists.exclude(
             pk=self.object.pk)
@@ -101,16 +100,16 @@ class WishListCreateView(PageTitleMixin, CreateView):
                 messages.error(
                     request, _("The requested product no longer exists"))
                 return redirect('wishlists-create')
-        return super(WishListCreateView, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        ctx = super(WishListCreateView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['product'] = self.product
         return ctx
 
     def get_form_kwargs(self):
-        kwargs = super(WishListCreateView, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
 
@@ -146,7 +145,7 @@ class WishListCreateWithProductView(View):
         messages.success(
             request, _("%(title)s has been added to your wishlist") % {
                 'title': product.get_title()})
-        return redirect_to_referrer(request.META, wishlist.get_absolute_url())
+        return redirect_to_referrer(request, wishlist.get_absolute_url())
 
 
 class WishListUpdateView(PageTitleMixin, UpdateView):
@@ -164,7 +163,7 @@ class WishListUpdateView(PageTitleMixin, UpdateView):
                                  key=self.kwargs['key'])
 
     def get_form_kwargs(self):
-        kwargs = super(WishListUpdateView, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
 
@@ -181,7 +180,7 @@ class WishListDeleteView(PageTitleMixin, DeleteView):
     active_tab = "wishlists"
 
     def get_page_title(self):
-        return _(u'Delete %s') % self.object.name
+        return _('Delete %s') % self.object.name
 
     def get_object(self, queryset=None):
         return get_object_or_404(WishList, owner=self.request.user,
@@ -206,7 +205,7 @@ class WishListAddProduct(View):
     def dispatch(self, request, *args, **kwargs):
         self.product = get_object_or_404(Product, pk=kwargs['product_pk'])
         self.wishlist = self.get_or_create_wishlist(request, *args, **kwargs)
-        return super(WishListAddProduct, self).dispatch(request)
+        return super().dispatch(request)
 
     def get_or_create_wishlist(self, request, *args, **kwargs):
         if 'key' in kwargs:
@@ -236,7 +235,7 @@ class WishListAddProduct(View):
         msg = _("'%s' was added to your wish list.") % self.product.get_title()
         messages.success(self.request, msg)
         return redirect_to_referrer(
-            self.request.META, self.product.get_absolute_url())
+            self.request, self.product.get_absolute_url())
 
 
 class LineMixin(object):
@@ -267,7 +266,7 @@ class WishListRemoveProduct(LineMixin, PageTitleMixin, DeleteView):
     active_tab = "wishlists"
 
     def get_page_title(self):
-        return _(u'Remove %s') % self.object.get_title()
+        return _('Remove %s') % self.object.get_title()
 
     def get_object(self, queryset=None):
         self.fetch_line(
@@ -276,7 +275,7 @@ class WishListRemoveProduct(LineMixin, PageTitleMixin, DeleteView):
         return self.line
 
     def get_context_data(self, **kwargs):
-        ctx = super(WishListRemoveProduct, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['wishlist'] = self.wishlist
         ctx['product'] = self.product
         return ctx
@@ -289,9 +288,9 @@ class WishListRemoveProduct(LineMixin, PageTitleMixin, DeleteView):
 
         # We post directly to this view on product pages; and should send the
         # user back there if that was the case
-        referrer = safe_referrer(self.request.META, '')
-        if (referrer and self.product and
-                self.product.get_absolute_url() in referrer):
+        referrer = safe_referrer(self.request, '')
+        if (referrer and self.product
+                and self.product.get_absolute_url() in referrer):
             return referrer
         else:
             return reverse(
@@ -306,20 +305,27 @@ class WishListMoveProductToAnotherWishList(LineMixin, View):
                             line_pk=kwargs['line_pk'])
         except (ObjectDoesNotExist, MultipleObjectsReturned):
             raise Http404
-        return super(WishListMoveProductToAnotherWishList, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
         to_wishlist = get_object_or_404(
             WishList, owner=request.user, key=kwargs['to_key'])
-        self.line.wishlist = to_wishlist
-        self.line.save()
 
-        msg = _("'%(title)s' moved to '%(name)s' wishlist") % {
-            'title': self.product.get_title(),
-            'name': to_wishlist.name}
-        messages.success(self.request, msg)
+        if to_wishlist.lines.filter(product=self.line.product).count() > 0:
+            msg = _("Wish list '%(name)s' already containing '%(title)s'") % {
+                'title': self.product.get_title(),
+                'name': to_wishlist.name}
+            messages.error(self.request, msg)
+        else:
+            self.line.wishlist = to_wishlist
+            self.line.save()
+
+            msg = _("'%(title)s' moved to '%(name)s' wishlist") % {
+                'title': self.product.get_title(),
+                'name': to_wishlist.name}
+            messages.success(self.request, msg)
 
         default_url = reverse(
             'customer:wishlists-detail', kwargs={'key': self.wishlist.key})
-        return redirect_to_referrer(self.request.META, default_url)
+        return redirect_to_referrer(self.request, default_url)

@@ -1,22 +1,21 @@
 from django import forms
-from oscar.core.loading import get_model
 from django.contrib.auth.forms import AuthenticationForm
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
-from oscar.apps.address.forms import AbstractAddressForm
 from oscar.apps.customer.utils import normalise_email
 from oscar.core.compat import get_user_model
-
-from oscar.views.generic import PhoneNumberMixin
+from oscar.core.loading import get_class, get_model
+from oscar.forms.mixins import PhoneNumberMixin
 
 User = get_user_model()
+AbstractAddressForm = get_class('address.forms', 'AbstractAddressForm')
 Country = get_model('address', 'Country')
 
 
 class ShippingAddressForm(PhoneNumberMixin, AbstractAddressForm):
 
     def __init__(self, *args, **kwargs):
-        super(ShippingAddressForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.adjust_country_field()
 
     def adjust_country_field(self):
@@ -33,7 +32,21 @@ class ShippingAddressForm(PhoneNumberMixin, AbstractAddressForm):
 
     class Meta:
         model = get_model('order', 'shippingaddress')
-        exclude = ('user', 'search_text')
+        fields = [
+            'title', 'first_name', 'last_name',
+            'line1', 'line2', 'line3', 'line4',
+            'state', 'postcode', 'country',
+            'phone_number', 'notes',
+        ]
+
+
+class ShippingMethodForm(forms.Form):
+    method_code = forms.ChoiceField(widget=forms.HiddenInput)
+
+    def __init__(self, *args, **kwargs):
+        methods = kwargs.pop('methods', [])
+        super().__init__(*args, **kwargs)
+        self.fields['method_code'].choices = ((m.code, m.name) for m in methods)
 
 
 class GatewayForm(AuthenticationForm):
@@ -57,10 +70,10 @@ class GatewayForm(AuthenticationForm):
             if 'username' in self.cleaned_data:
                 email = normalise_email(self.cleaned_data['username'])
                 if User._default_manager.filter(email__iexact=email).exists():
-                    msg = "A user with that email address already exists"
+                    msg = _("A user with that email address already exists")
                     self._errors["username"] = self.error_class([msg])
             return self.cleaned_data
-        return super(GatewayForm, self).clean()
+        return super().clean()
 
     def is_guest_checkout(self):
         return self.cleaned_data.get('options', None) == self.GUEST

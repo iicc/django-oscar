@@ -1,3 +1,5 @@
+/*global jQuery */
+
 var oscar = (function(o, $) {
 
     o.getCsrfToken = function() {
@@ -5,12 +7,16 @@ var oscar = (function(o, $) {
         var cookies = document.cookie.split(';');
         var csrf_token = null;
         $.each(cookies, function(index, cookie) {
-            cookieParts = $.trim(cookie).split('=');
+            var cookieParts = $.trim(cookie).split('=');
             if (cookieParts[0] == 'csrftoken') {
-                csrfToken = cookieParts[1];
+                csrf_token = cookieParts[1];
             }
         });
-        return csrfToken;
+        // Extract from cookies fails for HTML-Only cookies
+        if (! csrf_token) {
+            csrf_token = $(document.forms.valueOf()).find('[name="csrfmiddlewaretoken"]')[0].value;
+        }
+        return csrf_token;
     };
 
     o.dashboard = {
@@ -22,11 +28,14 @@ var oscar = (function(o, $) {
                 'timeFormat': 'hh:ii',
                 'datetimeFormat': 'yy-mm-dd hh:ii',
                 'stepMinute': 15,
+                'initialDate': new Date(new Date().setSeconds(0)),
                 'tinyConfig': {
+                    entity_encoding: 'raw',
                     statusbar: false,
                     menubar: false,
-                    plugins: "link",
+                    plugins: "link lists",
                     style_formats: [
+                        {title: 'Text', block: 'p'},
                         {title: 'Heading', block: 'h2'},
                         {title: 'Subheading', block: 'h3'}
                     ],
@@ -40,7 +49,7 @@ var oscar = (function(o, $) {
 
             $(".category-select ul").prev('a').on('click', function(){
                 var $this = $(this),
-                plus = $this.hasClass('ico_expand');
+                    plus = $this.hasClass('ico_expand');
                 if (plus) {
                     $this.removeClass('ico_expand').addClass('ico_contract');
                 } else {
@@ -51,8 +60,8 @@ var oscar = (function(o, $) {
 
             // Adds error icon if there are errors in the product update form
             $('[data-behaviour="affix-nav-errors"] .tab-pane').each(function(){
-              var productErrorListener = $(this).find('[class*="error"]:not(:empty)').closest('.tab-pane').attr('id');
-              $('[data-spy="affix"] a[href="#' + productErrorListener + '"]').append('<i class="icon-info-sign pull-right"></i>');
+                var productErrorListener = $(this).find('[class*="error"]:not(:empty)').closest('.tab-pane').attr('id');
+                $('[data-spy="affix"] a[href="#' + productErrorListener + '"]').append('<i class="icon-info-sign pull-right"></i>');
             });
 
             o.dashboard.filereader.init();
@@ -75,54 +84,68 @@ var oscar = (function(o, $) {
             o.dashboard.initSelects(el);
         },
         initMasks: function(el) {
-            $(el).find(':input').inputmask()
+            $(el).find(':input').inputmask();
         },
         initSelects: function(el) {
             // Adds type/search for select fields
             var $selects = $(el).find('select').not('.no-widget-init select').not('.no-widget-init');
             $selects.filter('.form-stacked select').css('width', '95%');
             $selects.filter('.form-inline select').css('width', '300px');
-            $selects.select2({width: 'resolve'});
-            $(el).find('input.select2').each(function(i, e) {
+            $selects.not('.related-widget-wrapper select').select2({width: 'resolve'});
+            $selects.filter('.related-widget-wrapper.single select').select2({
+                // Keep updated labels after editing related obj
+                templateResult: function (data) {
+                    return $(data.element).text();
+                },
+                templateSelection: function (data) {
+                    return $(data.element).text();
+                },
+                width: 'resolve'
+            });
+            $selects.filter('.related-widget-wrapper.multiple select').select2({
+                templateResult: function (data) {
+                    return $(data.element).text();
+                },
+                templateSelection: function (data) {
+                    var $this = $(data.element).closest('.related-widget-wrapper');
+                    var siblings = $this.find('.change-related, .delete-related');
+                    if (!siblings.length) {
+                        return;
+                    }
+                    var value = data.id;
+                    var label = $(data.element).text();
+                    if (value) {
+                        siblings.each(function() {
+                            var elm = $(this);
+                            elm.attr('href', elm.attr('data-href-template').replace('__fk__', value));
+                            label += ' ';
+                            label += elm[0].outerHTML;
+                        });
+                    } else {
+                        siblings.removeAttr('href');
+                    }
+                    return label;
+                },
+                escapeMarkup: function(markup) {
+                    return markup;
+                },
+                width: '95%'
+            });
+            $(el).find('select.select2').each(function(i, e) {
                 var opts = {};
                 if($(e).data('ajax-url')) {
                     opts = {
-                        'ajax': {
-                            'url': $(e).data('ajax-url'),
-                            'dataType': 'json',
-                            'results': function(data, page) {
-                                if((page==1) && !($(e).data('required')=='required')) {
-                                    data.results.unshift({'id': '', 'text': '------------'});
-                                }
-                                return data;
-                            },
-                            'data': function(term, page) {
+                        ajax: {
+                            url: $(e).data('ajax-url'),
+                            dataType: 'json',
+                            data: function(params) {
                                 return {
-                                    'q': term,
-                                    'page': page
+                                    q: params.term,
+                                    page: params.page || 1
                                 };
                             }
                         },
-                        'multiple': $(e).data('multiple'),
-                        'initSelection': function(e, callback){
-                            if($(e).val()) {
-                                $.ajax({
-                                    'type': 'GET',
-                                    'url': $(e).data('ajax-url'),
-                                    'data': [{'name': 'initial', 'value': $(e).val()}],
-                                    'success': function(data){
-                                        if(data.results) {
-                                            if($(e).data('multiple')){
-                                                callback(data.results);
-                                            } else {
-                                                callback(data.results[0]);
-                                            }
-                                        }
-                                    },
-                                    'dataType': 'json'
-                                });
-                            }
-                        }
+                        multiple: $(e).data('multiple')
                     };
                 }
                 $(e).select2(opts);
@@ -136,57 +159,56 @@ var oscar = (function(o, $) {
                     'language': o.dashboard.options.languageCode,
                     'minView': 2
                 };
-                $dates = $(el).find('[data-oscarWidget="date"]').not('.no-widget-init').not('.no-widget-init *')
+                var $dates = $(el).find('[data-oscarWidget="date"]').not('.no-widget-init').not('.no-widget-init *');
                 $dates.each(function(ind, ele) {
                     var $ele = $(ele),
                         config = $.extend({}, defaultDatepickerConfig, {
                             'format': $ele.data('dateformat')
                         });
                     $ele.datetimepicker(config);
-                    $ele.find('input').css('width', '125px');
                 });
 
                 var defaultDatetimepickerConfig = {
                     'format': o.dashboard.options.datetimeFormat,
                     'minuteStep': o.dashboard.options.stepMinute,
                     'autoclose': true,
-                    'language': o.dashboard.options.languageCode
+                    'language': o.dashboard.options.languageCode,
+                    'initialDate': o.dashboard.options.initialDate
                 };
-                $datetimes = $(el).find('[data-oscarWidget="datetime"]').not('.no-widget-init').not('.no-widget-init *')
+                var $datetimes = $(el).find('[data-oscarWidget="datetime"]').not('.no-widget-init').not('.no-widget-init *');
                 $datetimes.each(function(ind, ele) {
                     var $ele = $(ele),
                         config = $.extend({}, defaultDatetimepickerConfig, {
-                          'format': $ele.data('datetimeformat'),
-                          'minuteStep': $ele.data('stepminute')
+                            'format': $ele.data('datetimeformat'),
+                            'minuteStep': $ele.data('stepminute')
                         });
                     $ele.datetimepicker(config);
-                    $ele.find('input').css('width', '125px');
                 });
 
                 var defaultTimepickerConfig = {
                     'format': o.dashboard.options.timeFormat,
                     'minuteStep': o.dashboard.options.stepMinute,
                     'autoclose': true,
-                    'language': o.dashboard.options.languageCode
+                    'language': o.dashboard.options.languageCode,
+                    'initialDate': o.dashboard.options.initialDate
                 };
-                $times = $(el).find('[data-oscarWidget="time"]').not('.no-widget-init').not('.no-widget-init *')
+                var $times = $(el).find('[data-oscarWidget="time"]').not('.no-widget-init').not('.no-widget-init *');
                 $times.each(function(ind, ele) {
                     var $ele = $(ele),
                         config = $.extend({}, defaultTimepickerConfig, {
-                          'format': $ele.data('timeformat'),
-                          'minuteStep': $ele.data('stepminute'),
-                          'startView': 1,
-                          'maxView': 1,
-                          'formatViewType': 'time'
+                            'format': $ele.data('timeformat'),
+                            'minuteStep': $ele.data('stepminute'),
+                            'startView': 1,
+                            'maxView': 1,
+                            'formatViewType': 'time'
                         });
                     $ele.datetimepicker(config);
-                    $ele.find('input').css('width', '125px');
                 });
             }
         },
         initWYSIWYG: function(el) {
             // Use TinyMCE by default
-            $textareas = $(el).find('textarea').not('.no-widget-init textarea').not('.no-widget-init');
+            var $textareas = $(el).find('textarea').not('.no-widget-init textarea').not('.no-widget-init');
             $textareas.filter('form.wysiwyg textarea').tinymce(o.dashboard.options.tinyConfig);
             $textareas.filter('.wysiwyg').tinymce(o.dashboard.options.tinyConfig);
         },
@@ -220,12 +242,31 @@ var oscar = (function(o, $) {
                 }
             }
         },
+        product_attributes: {
+            init: function(){
+                var type_selects = $("select[name$=type]");
+
+                type_selects.each(function(){
+                    o.dashboard.product_attributes.toggleOptionGroup($(this));
+                });
+
+                type_selects.change(function(){
+                    o.dashboard.product_attributes.toggleOptionGroup($(this));
+                });
+            },
+
+            toggleOptionGroup: function(type_select){
+                var option_group_select = $('#' + type_select.attr('id').replace('type', 'option_group'));
+                var v = type_select.val();
+                option_group_select.parent().parent().toggle(v === 'option' || v === 'multi_option');
+            }
+        },
         ranges: {
             init: function() {
                 $('[data-behaviours~="remove"]').click(function() {
-                    $this = $(this);
-                    $this.parents('table').find('input').attr('checked', false);
-                    $this.parents('tr').find('input').attr('checked', 'checked');
+                    var $this = $(this);
+                    $this.parents('table').find('input').prop('checked', false);
+                    $this.parents('tr').find('input').prop('checked', true);
                     $this.parents('form').submit();
                 });
             }
@@ -252,32 +293,48 @@ var oscar = (function(o, $) {
         },
         reordering: (function() {
             var options = {
-                handle: '.btn-handle',
-                submit_url: '#'
-            },
-            saveOrder = function(event, ui) {
+                    handle: '.btn-handle',
+                    submit_url: '#'
+                },
+                saveOrder = function(data) {
                 // Get the csrf token, otherwise django will not accept the
                 // POST request.
-                var serial = $(this).sortable("serialize"),
-                    csrf = o.getCsrfToken();
-                serial = serial + '&csrfmiddlewaretoken=' + csrf;
-                $.ajax({
-                    type: 'POST',
-                    data: serial,
-                    dataType: "json",
-                    url: options.submit_url,
-                    beforeSend: function(xhr, settings) {
-                        xhr.setRequestHeader("X-CSRFToken", csrf);
-                    }
-                });
-            },
-            init = function(user_options) {
-                options = $.extend(options, user_options);
-                $(options.wrapper).sortable({
-                    handle: options.handle,
-                    stop: saveOrder
-                });
-            };
+                    var csrf = o.getCsrfToken();
+                    $.ajax({
+                        type: 'POST',
+                        data: $.param(data),
+                        dataType: "json",
+                        url: options.submit_url,
+                        beforeSend: function(xhr) {
+                            xhr.setRequestHeader("X-CSRFToken", csrf);
+                        }
+                    });
+                },
+                init = function(user_options) {
+                    options = $.extend(options, user_options);
+                    var group = $(options.wrapper).sortable({
+                        group: 'serialization',
+                        containerSelector: 'tbody',
+                        itemSelector: 'tr',
+                        handle: options.handle,
+                        vertical: true,
+                        onDrop: function ($item, container, _super) {
+                            var data = group.sortable("serialize");
+                            saveOrder(data);
+                            _super($item, container);
+                        },
+                        placeholder: '<tr class="placeholder"/>',
+                        serialize: function (parent, children, isContainer) {
+                            if (isContainer) {
+                                return children;
+                            }
+                            else {
+                                var parts = parent.attr('id').split('_');
+                                return {'name': parts[0], 'value': parts[1]};
+                            }
+                        }
+                    });
+                };
 
             return {
                 init: init,
@@ -289,7 +346,7 @@ var oscar = (function(o, $) {
                 var searchForm = $(".orders_search"),
                     searchLink = $('.pull_out'),
                     doc = $('document');
-                searchForm.each(function(index) {
+                searchForm.each(function() {
                     doc.css('height', doc.height());
                 });
                 searchLink.on('click', function() {
@@ -298,7 +355,7 @@ var oscar = (function(o, $) {
                         .toggleClass('no-float')
                         .end().end()
                         .slideToggle("fast");
-                    }
+                }
                 );
             }
         },
@@ -322,7 +379,20 @@ var oscar = (function(o, $) {
                     });
                 }
             }
-        }
+        },
+        product_lists: {
+            init: function() {
+                var imageModal = $("#product-image-modal"),
+                    thumbnails = $('.sub-image');
+                thumbnails.click(function(e){
+                    e.preventDefault();
+                    var a = $(this);
+                    imageModal.find('h4').text(a.find('img').attr('alt'));
+                    imageModal.find('img').attr('src', a.data('original'));
+                    imageModal.modal();
+                });
+            }
+        },
     };
 
     return o;

@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from mock import Mock
+from unittest.mock import Mock
 
 
 @contextmanager
@@ -18,7 +18,8 @@ def mock_signal_receiver(signal, wraps=None, **kwargs):
     https://github.com/dcramer/mock-django/blob/master/mock_django/signals.py
     """
     if wraps is None:
-        wraps = lambda *args, **kwargs: None
+        def wraps(*args, **kwargs):
+            return None
 
     receiver = Mock(wraps=wraps)
     signal.connect(receiver, **kwargs)

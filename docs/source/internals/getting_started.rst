@@ -47,70 +47,123 @@ recommended to install Oscar in a virtualenv.
 Django settings
 ===============
 
-Edit your settings file ``frobshop.frobshop.settings.py`` to specify
-``TEMPLATE_CONTEXT_PROCESSORS``:
+First, edit your settings file ``frobshop.frobshop.settings.py`` to import all of Oscar's default settings.
 
 .. code-block:: django
 
-    TEMPLATE_CONTEXT_PROCESSORS = (
-        "django.contrib.auth.context_processors.auth",
-        "django.core.context_processors.request",
-        "django.core.context_processors.debug",
-        "django.core.context_processors.i18n",
-        "django.core.context_processors.media",
-        "django.core.context_processors.static",
-        "django.core.context_processors.tz",
-        "django.contrib.messages.context_processors.messages",
-        'oscar.apps.search.context_processors.search_form',
-        'oscar.apps.promotions.context_processors.promotions',
-        'oscar.apps.checkout.context_processors.checkout',
-        'oscar.apps.customer.notifications.context_processors.notifications',
-        'oscar.core.context_processors.metadata',
-    )
+    from oscar.defaults import *
 
-Next, modify ``INSTALLED_APPS`` to be a list, add ``django.contrib.sites``, ``django.contrib.flatpages`` and ``compressor``
-and append Oscar's core apps. Also set ``SITE_ID``:
+
+Now modify your ``TEMPLATES`` to include the main Oscar template directory and add the extra
+context processors.
 
 .. code-block:: django
 
-    from oscar import get_core_apps
+    from oscar import OSCAR_MAIN_TEMPLATE_DIR
+
+    TEMPLATES = [
+        {
+            'BACKEND': 'django.template.backends.django.DjangoTemplates',
+            'DIRS': [
+                os.path.join(BASE_DIR, 'templates'),
+                OSCAR_MAIN_TEMPLATE_DIR
+            ],
+            'APP_DIRS': True,
+            'OPTIONS': {
+                'context_processors': [
+                    'django.template.context_processors.debug',
+                    'django.template.context_processors.request',
+                    'django.contrib.auth.context_processors.auth',
+                    'django.template.context_processors.i18n',
+                    'django.contrib.messages.context_processors.messages',
+
+                    'oscar.apps.search.context_processors.search_form',
+                    'oscar.apps.checkout.context_processors.checkout',
+                    'oscar.apps.customer.notifications.context_processors.notifications',
+                    'oscar.core.context_processors.metadata',
+                ],
+            },
+        },
+    ]
+
+Next, modify ``INSTALLED_APPS`` to be a list, and add ``django.contrib.sites``,
+``django.contrib.flatpages``, Oscar's core apps, and third-party apps that Oscar
+depends on. Also set ``SITE_ID``:
+
+.. code-block:: django
 
     INSTALLED_APPS = [
+        'django.contrib.admin',
         'django.contrib.auth',
         'django.contrib.contenttypes',
         'django.contrib.sessions',
-        'django.contrib.sites',
         'django.contrib.messages',
         'django.contrib.staticfiles',
+
+        'django.contrib.sites',
         'django.contrib.flatpages',
-        ...
-        'compressor',
-    ] + get_core_apps()
+
+        'oscar',
+        'oscar.apps.analytics',
+        'oscar.apps.checkout',
+        'oscar.apps.address',
+        'oscar.apps.shipping',
+        'oscar.apps.catalogue',
+        'oscar.apps.catalogue.reviews',
+        'oscar.apps.partner',
+        'oscar.apps.basket',
+        'oscar.apps.payment',
+        'oscar.apps.offer',
+        'oscar.apps.order',
+        'oscar.apps.customer',
+        'oscar.apps.search',
+        'oscar.apps.voucher',
+        'oscar.apps.wishlists',
+        'oscar.apps.dashboard',
+        'oscar.apps.dashboard.reports',
+        'oscar.apps.dashboard.users',
+        'oscar.apps.dashboard.orders',
+        'oscar.apps.dashboard.catalogue',
+        'oscar.apps.dashboard.offers',
+        'oscar.apps.dashboard.partners',
+        'oscar.apps.dashboard.pages',
+        'oscar.apps.dashboard.ranges',
+        'oscar.apps.dashboard.reviews',
+        'oscar.apps.dashboard.vouchers',
+        'oscar.apps.dashboard.communications',
+        'oscar.apps.dashboard.shipping',
+
+        # 3rd-party apps that oscar depends on
+        'widget_tweaks',
+        'haystack',
+        'treebeard',
+        'sorl.thumbnail',
+        'django_tables2',
+    ]
 
     SITE_ID = 1
 
 Note that Oscar requires ``django.contrib.flatpages`` which isn't
-included by default. ``flatpages`` also requires ``django.contrib.sites``,
-which won't be enabled by default when using Django 1.6 or upwards.
+included by default. ``flatpages`` also requires ``django.contrib.sites``.
 More info about installing ``flatpages`` is in the `Django docs`_.
 
-.. _`Django docs`: https://docs.djangoproject.com/en/dev/ref/contrib/flatpages/#installation
+.. _`Django docs`: https://docs.djangoproject.com/en/stable/ref/contrib/flatpages/#installation
 
 .. tip::
 
-    Oscar's default templates use django-compressor_ but it's optional really.
-    You may decide to use your own templates that don't use compressor.  Hence
-    why it is not one of the 'core apps'.
+    Oscar's default templates use django-widget-tweaks_ but it's
+    optional really.  You may decide to use your own templates that
+    don't use either.
 
-.. _django-compressor: https://github.com/jezdez/django_compressor
+.. _django-widget-tweaks: https://github.com/kmike/django-widget-tweaks
 
 Next, add ``oscar.apps.basket.middleware.BasketMiddleware`` and
 ``django.contrib.flatpages.middleware.FlatpageFallbackMiddleware`` to
-your ``MIDDLEWARE_CLASSES`` setting.
+your ``MIDDLEWARE`` setting.
 
 .. code-block:: django
 
-    MIDDLEWARE_CLASSES = (
+    MIDDLEWARE = (
         ...
         'oscar.apps.basket.middleware.BasketMiddleware',
         'django.contrib.flatpages.middleware.FlatpageFallbackMiddleware',
@@ -134,29 +187,9 @@ Check out the `sandbox settings`_ for a working example. If you're serving
 files from a remote storage (e.g. Amazon S3), you must manually copy a
 :ref:`"Image not found" image <missing-image-label>` into ``MEDIA_ROOT``.
 
-.. _`configured correctly`: https://docs.djangoproject.com/en/1.7/howto/static-files/
-.. _sandbox settings: https://github.com/django-oscar/django-oscar/blob/3a5160a86c9b14c940c76a224a28cd37dd29f7f1/sites/sandbox/settings.py#L99
+.. _`configured correctly`: https://docs.djangoproject.com/en/stable/howto/static-files/
+.. _sandbox settings: https://github.com/django-oscar/django-oscar/blob/master/sandbox/settings.py#L102
 
-Modify your ``TEMPLATE_DIRS`` to include the main Oscar template directory:
-
-.. code-block:: django
-
-    import os
-    from oscar import OSCAR_MAIN_TEMPLATE_DIR
-
-    location = lambda x: os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), x)
-
-    TEMPLATE_DIRS = (
-        location('templates'),
-        OSCAR_MAIN_TEMPLATE_DIR,
-    )
-
-The last addition to the settings file is to import all of Oscar's default settings:
-
-.. code-block:: django
-
-    from oscar.defaults import *
 
 URLs
 ====
@@ -171,23 +204,30 @@ you will also need to include Django's i18n URLs:
 
 .. code-block:: django
 
-    from django.conf.urls import include, url
-    from oscar.app import application
+    from django.apps import apps
+    from django.conf.urls import include, url  # < Django-2.0
+    # from django.urls import include, path  # > Django-2.0
+    from django.contrib import admin
 
     urlpatterns = [
         url(r'^i18n/', include('django.conf.urls.i18n')),
+        # path('i18n/', include('django.conf.urls.i18n')),  # > Django-2.0
 
         # The Django admin is not officially supported; expect breakage.
         # Nonetheless, it's often useful for debugging.
-        url(r'^admin/', include(admin.site.urls)),
 
-        url(r'', include(application.urls)),
+        url(r'^admin/', admin.site.urls),
+        # path('admin/', admin.site.urls),  # > Django-2.0
+
+        url(r'^', include(apps.get_app_config('oscar').urls[0])),
+        # path('', include(apps.get_app_config('oscar').urls[0])),  # > Django-2.0
     ]
+
 
 Search backend
 ==============
-If you're happy with basic search for now, you can just use Haystack's simple
-backend:
+If you're happy with basic search for now, you can just add Haystack's simple
+backend to the ``HAYSTACK_CONNECTIONS`` option in your Django settings:
 
 .. code-block:: django
 
@@ -238,37 +278,15 @@ Check your database settings. A quick way to get started is to use SQLite:
 Note that we recommend using ``ATOMIC_REQUESTS`` to tie transactions to
 requests.
 
-Migrations
-----------
-
-Oscar ships with two sets of migrations. If you're running Django 1.7, you
-don't need to do anything; Django's migration framework will detect them
-automatically and will do the right thing.
-If you're running Django 1.6, you need to install `South`_:
-
-.. code-block:: bash
-
-    $ pip install South
-
-And you need to add it to your installed apps:
-
-.. code-block:: django
-
-    INSTALLED_APPS = [
-        ...
-        'south',
-    ] + get_core_apps()
-
-.. _South: http://south.readthedocs.org/en/latest/
-
-Create Database
+Create database
 ---------------
 
-Then create the database and the shop should be browsable:
+Oscar ships with migrations. Django's migration framework will detect them
+automatically and will do the right thing.
+Create the database and the shop should be browsable:
 
 .. code-block:: bash
 
-    $ python manage.py syncdb --noinput  # Only needed for Django 1.6
     $ python manage.py migrate
     $ python manage.py runserver
 
@@ -311,7 +329,7 @@ These aren't created automatically as they're highly specific to the shop you
 want to build.
 
 When managing your catalogue you should always use the Oscar dashboard, which
-provides the necessary functionality. Login to:
+provides the necessary functionality. Use your Django superuser email and password to login to:
 http://127.0.0.1:8000/dashboard/ and create instances of both there.
 
 It is important to note that the Django admin site is not supported. It may

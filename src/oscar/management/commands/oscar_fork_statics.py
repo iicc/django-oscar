@@ -5,7 +5,6 @@ import shutil
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -14,12 +13,14 @@ class Command(BaseCommand):
     Copy Oscar's statics into local project so they can be used as a base for
     styling a new site.
     """
-    args = '<destination folder>'
     help = "Copy Oscar's static files"
+
+    def add_arguments(self, parser):
+        parser.add_argument('target_path', nargs='?', default='static')
 
     def handle(self, *args, **options):
         # Determine where to copy to
-        folder = args[0] if args else 'static'
+        folder = options['target_path']
         if not folder.startswith('/'):
             destination = os.path.join(os.getcwd(), folder)
         else:

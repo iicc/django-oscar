@@ -1,6 +1,3 @@
-from django.utils.encoding import force_text
-
-
 class CheckoutSessionData(object):
     """
     Responsible for marshalling all the checkout session data
@@ -77,7 +74,7 @@ class CheckoutSessionData(object):
     # Options:
     # 1. No shipping required (eg digital products)
     # 2. Ship to new address (entered in a form)
-    # 3. Ship to an addressbook address (address chosen from list)
+    # 3. Ship to an address book address (address chosen from list)
 
     def reset_shipping_data(self):
         self._flush_namespace('shipping')
@@ -96,9 +93,10 @@ class CheckoutSessionData(object):
         self._unset('shipping', 'new_address_fields')
         phone_number = address_fields.get('phone_number')
         if phone_number:
+            # Phone number is stored as a PhoneNumber instance. As we store
+            # strings in the session, we need to serialize it.
             address_fields = address_fields.copy()
-            address_fields['phone_number'] = force_text(
-                address_fields['phone_number'])
+            address_fields['phone_number'] = phone_number.as_international
         self._set('shipping', 'new_address_fields', address_fields)
 
     def new_shipping_address_fields(self):
@@ -167,7 +165,13 @@ class CheckoutSessionData(object):
         """
         Store address fields for a billing address.
         """
-        self._flush_namespace('billing')
+        self._unset('billing', 'new_address_fields')
+        phone_number = address_fields.get('phone_number')
+        if phone_number:
+            # Phone number is stored as a PhoneNumber instance. As we store
+            # strings in the session, we need to serialize it.
+            address_fields = address_fields.copy()
+            address_fields['phone_number'] = phone_number.as_international
         self._set('billing', 'new_address_fields', address_fields)
 
     def bill_to_user_address(self, address):

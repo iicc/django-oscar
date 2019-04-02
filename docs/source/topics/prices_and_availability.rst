@@ -23,7 +23,9 @@ calculating prices and availability information.
 
 .. code-block:: python
 
+   >>> from oscar.apps.partner.strategy import Selector
    >>> product = Product.objects.get(id=1)
+   >>> strategy = Selector().strategy()
    >>> info = strategy.fetch_for_product(product)
 
    # Availability information
@@ -159,6 +161,22 @@ For most projects, subclassing and overriding the ``Structured`` base class
 should be sufficient.  However, Oscar also provides mixins to easily compose the
 appropriate strategy class for your domain.
 
+Currency
+--------
+
+Oscar allows you to define a currency code for each stock - a text field that
+defaults to ``settings.OSCAR_DEFAULT_CURRENCY``.
+
+By default, Oscar expects all products added to a single basket to have the
+same currency. It does not however do any logic to select the appropriate
+stock record to achieve this - you must implement this yourself in the
+:func:`~oscar.apps.partner.strategy.Structured.select_stockrecord` method.
+Oscar does not determine or store user currency and uses it only for
+formatting product price. More complex logic, like currency switch or
+conversion can be implemented additionally.
+
+More about currency formatting configuration - :ref:`currency-format-setting`.
+
 Loading a strategy
 ------------------
 
@@ -260,7 +278,7 @@ Here's an example ``strategy.py`` module which is used to charge VAT on prices.
 .. code-block:: python
 
     # myproject/partner/strategy.py
-
+    from decimal import Decimal as D
     from oscar.apps.partner import strategy, prices
 
 

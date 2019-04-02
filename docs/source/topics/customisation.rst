@@ -32,42 +32,58 @@ recommended:
 * :doc:`Dynamic class loading</topics/class_loading_explained>`
 * :doc:`fork_app`
 
+.. _fork-oscar-app:
+
 Fork the Oscar app
 ==================
 
 If this is the first time you're forking an Oscar app, you'll need to create
 a root module under which all your forked apps will live::
 
-    $ mkdir yourproject
-    $ touch yourproject/__init__.py
+    $ mkdir yourappsfolder
+    $ touch yourappsfolder/__init__.py
 
 Now you call the helper management command which creates some basic files for
 you. It is explained in detail in :doc:`fork_app`. Run it like this::
 
-    $ ./manage.py oscar_fork_app order yourproject/
-    Creating folder apps/order
-    Creating __init__.py and admin.py
-    Creating models.py and copying migrations from [...] to [...]
+    $ ./manage.py oscar_fork_app order yourappsfolder
+    Creating package yourappsfolder/order
+    Creating admin.py
+    Creating app config
+    Creating models.py
+    Creating migrations folder
+    Replace the entry 'oscar.apps.order.apps.OrderConfig' with 'yourappsfolder.order.apps.OrderConfig' in INSTALLED_APPS
 
 Replace Oscar's app with your own in ``INSTALLED_APPS``
 =======================================================
 
 You will need to let Django know that you replaced one of Oscar's core
-apps. You can do that by supplying an extra argument to
-``get_core_apps`` function::
+apps. You can do that by replacing its entry in the ``INSTALLED_APPS`` setting,
+with that for your own app.
 
-    # settings.py
+.. note::
 
-    from oscar import get_core_apps
-    # ...
-    INSTALLED_APPS = [
-        # all your non-Oscar apps
-    ] + get_core_apps(['yourproject.order'])
+    Overrides of dashboard applications should follow overrides of core
+    applications (basket, catalogue etc), since they depend on models,
+    declared in the core applications. Otherwise, it could cause issues
+    with Oscar's dynamic model loading.
 
-``get_core_apps([])`` will return a list of Oscar core apps. If you supply a
-list of additional apps, they will be used to replace the Oscar core apps.
-In the above example, ``yourproject.order`` will be returned instead of
-``oscar.apps.order``.
+    Example:
+
+    .. code:: django
+
+        INSTALLED_APPS = [
+            # all your non-Oscar apps
+            ...
+            # core applications
+            'yourappsfolder.catalogue',
+            'yourappsfolder.order',
+            # dashboard applications
+            'yourappsfolder.dashboard',
+            'yourappsfolder.dashboard.orders',
+            'yourappsfolder.dashboard.reports',
+        ]
+
 
 Start customising!
 ==================
@@ -92,5 +108,8 @@ could subclass the class from Oscar or not::
     class OrderNumberGenerator(CoreOrderNumberGenerator):
 
         def order_number(self, basket=None):
-            num = super(OrderNumberGenerator, self).order_number(basket)
+            num = super().order_number(basket)
             return "SHOP-%s" % num
+
+To obtain an Oscar app's app config instance, look it up in the Django app
+registry.

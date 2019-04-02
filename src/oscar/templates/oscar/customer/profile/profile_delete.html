@@ -3,7 +3,7 @@
 
 {% block tabcontent %}
     <p>{% trans "Please confirm your password to delete your profile." %}</p>
-    <form id="delete_profile_form" action="." method="post" class="form-horizontal">
+    <form id="delete_profile_form" method="post" class="form-horizontal">
         {% csrf_token %}
         {% include "partials/form_fields.html" %}
         <div class="alert alert-warning">
@@ -13,7 +13,7 @@
                 undone.
             {% endblocktrans %}
         </div>
-        <div class="form-group form-actions">
+        <div class="form-group">
             <button class="btn btn-lg btn-danger" type="submit" data-loading-text="{% trans 'Deleting...' %}">{% trans "Delete" %}</button>
             {% trans "or" %} <a href="{% url "customer:profile-view" %}">{% trans "cancel" %}</a>.
         </div>

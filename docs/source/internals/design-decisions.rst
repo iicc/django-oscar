@@ -19,7 +19,7 @@ Another is to use the Entity-Attribute-Value pattern to use add meta-data for ea
 your models.  However this is again ugly and mixes meta-data and data in your database (it's 
 an SQL anti-pattern).
 
-Oscar's approach to this problem is to have have minimal but abstract models
+Oscar's approach to this problem is to have minimal but abstract models
 where all the fields are meaningful within any e-commerce domain.  Oscar then
 provides a mechanism for subclassing these models within your application so
 domain-specific fields can be added.
@@ -37,10 +37,10 @@ Oscar need to be as customisable as possible. Hence almost all classes
 :doc:`dynamically loaded </topics/class_loading_explained>`,
 which results in a maintainable approach to customising behaviour.
 
-URLs and permissions for apps are handled by Application instances
-------------------------------------------------------------------
+URLs and permissions for apps are handled by app config instances
+-----------------------------------------------------------------
 
-The :class:`oscar.core.application.Application` class handles mapping URLs
+The :class:`oscar.core.application.OscarConfig` class handles mapping URLs
 to views and permissions at an per-app level. This makes Oscar's apps more
 modular, and makes it easy to customise this mapping as they can be overridden
 just like any other class in Oscar.

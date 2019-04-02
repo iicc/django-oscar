@@ -1,10 +1,8 @@
-import django
-
 """
 Vanilla product models
 """
-from oscar.core.loading import is_model_registered
 from oscar.apps.catalogue.abstract_models import *  # noqa
+from oscar.core.loading import is_model_registered
 
 __all__ = ['ProductAttributesContainer']
 
@@ -84,7 +82,3 @@ if not is_model_registered('catalogue', 'ProductImage'):
         pass
 
     __all__.append('ProductImage')
-
-
-if django.VERSION < (1, 7):
-    from . import receivers  # noqa

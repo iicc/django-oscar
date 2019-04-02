@@ -1,11 +1,10 @@
 import json
 
 from django.conf import settings
+
 from oscar.core.loading import get_model
 
-from oscar.core.loading import get_class
-
-product_viewed = get_class('catalogue.signals', 'product_viewed')
+Product = get_model('catalogue', 'Product')
 
 
 def get(request):
@@ -14,13 +13,8 @@ def get(request):
     """
     ids = extract(request)
 
-    # Needs to live in local scope because receivers in this module get
-    # registered during model initialisation
-    # TODO Move this back to global scope once Django < 1.7 support is removed
-    Product = get_model('catalogue', 'Product')
-
     # Reordering as the ID order gets messed up in the query
-    product_dict = Product.browsable.in_bulk(ids)
+    product_dict = Product.objects.browsable().in_bulk(ids)
     ids.reverse()
     return [product_dict[id] for id in ids if id in product_dict]
 
@@ -69,4 +63,5 @@ def update(product, request, response):
         settings.OSCAR_RECENTLY_VIEWED_COOKIE_NAME,
         json.dumps(updated_ids),
         max_age=settings.OSCAR_RECENTLY_VIEWED_COOKIE_LIFETIME,
+        secure=settings.OSCAR_RECENTLY_VIEWED_COOKIE_SECURE,
         httponly=True)

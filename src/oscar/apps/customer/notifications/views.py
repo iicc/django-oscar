@@ -1,14 +1,16 @@
-from django.utils.html import strip_tags
-from django.utils.translation import ugettext_lazy as _, ungettext
-from django.utils.timezone import now
+from django.conf import settings
 from django.contrib import messages
+from django.utils.html import strip_tags
+from django.utils.timezone import now
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import ungettext
 from django.views import generic
 
-from oscar.core.loading import get_model
+from oscar.core.loading import get_class, get_model
 from oscar.core.utils import redirect_to_referrer
-from oscar.apps.customer.mixins import PageTitleMixin
 from oscar.views.generic import BulkEditMixin
 
+PageTitleMixin = get_class('customer.mixins', 'PageTitleMixin')
 Notification = get_model('customer', 'Notification')
 
 
@@ -16,12 +18,12 @@ class NotificationListView(PageTitleMixin, generic.ListView):
     model = Notification
     template_name = 'customer/notifications/list.html'
     context_object_name = 'notifications'
-    paginate_by = 20
+    paginate_by = settings.OSCAR_NOTIFICATIONS_PER_PAGE
     page_title = _("Notifications")
     active_tab = 'notifications'
 
     def get_context_data(self, **kwargs):
-        ctx = super(NotificationListView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['list_type'] = self.list_type
         return ctx
 
@@ -30,20 +32,9 @@ class InboxView(NotificationListView):
     list_type = 'inbox'
 
     def get_queryset(self):
-        qs = self.model._default_manager.filter(
+        return self.model._default_manager.filter(
             recipient=self.request.user,
             location=self.model.INBOX)
-        # Mark unread notifications so they can be rendered differently...
-        for obj in qs:
-            if not obj.is_read:
-                setattr(obj, 'is_new', True)
-        # ...but then mark everything as read.
-        self.mark_as_read(qs)
-        return qs
-
-    def mark_as_read(self, queryset):
-        unread = queryset.filter(date_read=None)
-        unread.update(date_read=now())
 
 
 class ArchiveView(NotificationListView):
@@ -61,10 +52,17 @@ class DetailView(PageTitleMixin, generic.DetailView):
     context_object_name = 'notification'
     active_tab = 'notifications'
 
+    def get_object(self, queryset=None):
+        obj = super().get_object()
+        if not obj.date_read:
+            obj.date_read = now()
+            obj.save()
+        return obj
+
     def get_page_title(self):
         """Append subject to page title"""
         title = strip_tags(self.object.subject)
-        return u'%s: %s' % (_('Notification'), title)
+        return '%s: %s' % (_('Notification'), title)
 
     def get_queryset(self):
         return self.model._default_manager.filter(
@@ -75,6 +73,7 @@ class UpdateView(BulkEditMixin, generic.RedirectView):
     model = Notification
     actions = ('archive', 'delete')
     checkbox_object_name = 'notification'
+    permanent = False
 
     def get_object_dict(self, ids):
         return self.model.objects.filter(
@@ -82,7 +81,7 @@ class UpdateView(BulkEditMixin, generic.RedirectView):
 
     def get_success_response(self):
         return redirect_to_referrer(
-            self.request.META, 'customer:notifications-inbox')
+            self.request, 'customer:notifications-inbox')
 
     def archive(self, request, notifications):
         for notification in notifications:

@@ -1,12 +1,13 @@
 from django import shortcuts
 from django.contrib import messages
-from django.core.urlresolvers import reverse
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.views import generic
 
-from oscar.core.loading import get_model, get_class
+from oscar.core.loading import get_classes, get_model
 
-WeightBandForm = get_class('dashboard.shipping.forms', 'WeightBandForm')
+WeightBandForm, WeightBasedForm = get_classes(
+    'dashboard.shipping.forms', ['WeightBandForm', 'WeightBasedForm'])
 WeightBased = get_model('shipping', 'WeightBased')
 WeightBand = get_model('shipping', 'WeightBand')
 
@@ -19,6 +20,7 @@ class WeightBasedListView(generic.ListView):
 
 class WeightBasedCreateView(generic.CreateView):
     model = WeightBased
+    form_class = WeightBasedForm
     template_name = "dashboard/shipping/weight_based_form.html"
 
     def get_success_url(self):
@@ -32,22 +34,22 @@ class WeightBasedCreateView(generic.CreateView):
 
 class WeightBasedDetailView(generic.CreateView):
     model = WeightBand
-    template_name = "dashboard/shipping/weight_based_detail.html"
     form_class = WeightBandForm
+    template_name = "dashboard/shipping/weight_based_detail.html"
 
     def dispatch(self, request, *args, **kwargs):
         self.method = shortcuts.get_object_or_404(
             WeightBased, pk=kwargs['pk'])
-        return super(WeightBasedDetailView, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def get_form_kwargs(self, **kwargs):
-        kwargs = super(WeightBasedDetailView, self).get_form_kwargs(**kwargs)
+        kwargs = super().get_form_kwargs(**kwargs)
         kwargs['method'] = self.method
         return kwargs
 
     def get_context_data(self, **kwargs):
-        ctx = super(WeightBasedDetailView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['method'] = self.method
         return ctx
 
@@ -62,6 +64,7 @@ class WeightBasedDetailView(generic.CreateView):
 
 class WeightBasedUpdateView(generic.UpdateView):
     model = WeightBased
+    form_class = WeightBasedForm
     template_name = "dashboard/shipping/weight_based_form.html"
     context_object_name = "method"
 
@@ -83,14 +86,14 @@ class WeightBandUpdateView(generic.UpdateView):
     def dispatch(self, request, *args, **kwargs):
         self.method = shortcuts.get_object_or_404(
             WeightBased, pk=kwargs['method_pk'])
-        return super(WeightBandUpdateView, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def get_queryset(self):
         return self.method.bands.all()
 
     def get_form_kwargs(self, **kwargs):
-        kwargs = super(WeightBandUpdateView, self).get_form_kwargs(**kwargs)
+        kwargs = super().get_form_kwargs(**kwargs)
         kwargs['method'] = self.method
         return kwargs
 
@@ -111,7 +114,7 @@ class WeightBandDeleteView(generic.DeleteView):
     def dispatch(self, request, *args, **kwargs):
         self.method = shortcuts.get_object_or_404(
             WeightBased, pk=kwargs['method_pk'])
-        return super(WeightBandDeleteView, self).dispatch(
+        return super().dispatch(
             request, *args, **kwargs)
 
     def get_queryset(self):

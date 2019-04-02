@@ -1,128 +1,133 @@
+from six import with_metaclass
 from django import template
 from oscar.core.loading import get_model
 
 register = template.Library()
-Category = get_model('catalogue', 'category')
-
-# Since the category_tree template tag can be used multiple times in the same
-# set of templates, we use a cache to avoid creating the node multile times.
-NODE_CACHE = {}
+Category = get_model("catalogue", "category")
 
 
-@register.tag(name="category_tree")  # noqa (too complex (14))
-def do_category_list(parse, token):
-    tokens = token.split_contents()
-    error_msg = ("%r tag uses the following syntax: {%% category_tree "
-                 "[depth=n] [parent=<parent_category>] as categories %%}"
-                 % tokens[0])
-    # dict allows to assign values in `assign_vars` function closure
-    var = {
-        'depth': '0',
-        'parent': '',
-        'as': ''
-    }
+class PassThrough(object):
+    def __init__(self, name):
+        self.name = name
 
-    def assign_vars(p_name, p_var):
-        try:
-            var[p_name] = p_var
-        except KeyError:
-            raise template.TemplateSyntaxError(error_msg)
+    def __get__(self, obj, objtype):
+        if obj is None:
+            return self
 
-    if len(tokens) == 5:
-        if tokens[3] != 'as':
-            raise template.TemplateSyntaxError(error_msg)
-        p_name_was = None
-        for i in 1, 2:
-            p_name, p_var = tokens[i].split('=')
-            if p_name_was is not None and p_name == p_name_was:
-                # raise error if same arg is given twice
-                # for example {% category_tree depth=1 depth=2 as smth %}
-                raise template.TemplateSyntaxError(error_msg)
-            assign_vars(p_name, p_var)
-            p_name_was = p_name
-        var['as'] = tokens[-1]
-    elif len(tokens) == 4:
-        if tokens[2] != 'as':
-            raise template.TemplateSyntaxError(error_msg)
-        p_name, p_var = tokens[1].split('=')
-        assign_vars(p_name, p_var)
-        var['as'] = tokens[-1]
-    elif len(tokens) == 3:
-        if tokens[1] != 'as':
-            raise template.TemplateSyntaxError(error_msg)
-        var['as'] = tokens[-1]
+        return getattr(obj.category, self.name)
+
+
+class CategoryFieldPassThroughMetaClass(type):
+    """
+    Add accessors for category fields to whichever class is of this type.
+    """
+    def __new__(cls, name, bases, attrs):
+
+        field_accessors = {}
+        for field in Category._meta.get_fields():
+            name = field.name
+            field_accessors[name] = PassThrough(name)
+
+        # attrs win of silly field accessors
+        field_accessors.update(attrs)
+        return type.__new__(cls, name, bases, field_accessors)
+
+
+class CheapCategoryInfo(with_metaclass(CategoryFieldPassThroughMetaClass, dict)):
+    """
+    Wrapper class for Category.
+
+    Besides allowing inclusion of extra info, useful while rendering a template,
+    this class hides any expensive properties people should not use by accident
+    in templates.
+
+    This replaces both the node as the info object returned by the ``category_tree``
+    templatetag, so it mimics a tuple of 2 items (which are the same) for
+    backwards compatibility.
+    """
+
+    def __init__(self, category, **info):
+        super().__init__(info)
+        self.category = category
+
+    @property
+    def pk(self):
+        return self.category.pk
+
+    def get_absolute_url(self):
+        return self["url"]
+
+    def __len__(self):
+        "Mimic a tuple of 2 items"
+        return 2
+
+    def __iter__(self):
+        "be an iterable of 2 times the same item"
+        yield self
+        yield self
+
+
+@register.simple_tag(name="category_tree")   # noqa: C901 too complex
+def get_annotated_list(depth=None, parent=None):
+    """
+    Gets an annotated list from a tree branch.
+
+    Borrows heavily from treebeard's get_annotated_list
+    """
+    # 'depth' is the backwards-compatible name for the template tag,
+    # 'max_depth' is the better variable name.
+    max_depth = depth
+
+    annotated_categories = []
+    tree_slug = ""
+
+    start_depth, prev_depth = (None, None)
+    if parent:
+        categories = parent.get_descendants()
+        tree_slug = parent.get_full_slug()
+        if max_depth is not None:
+            max_depth += parent.get_depth()
     else:
-        raise template.TemplateSyntaxError(error_msg)
+        categories = Category.get_tree()
 
-    if var['parent']:
-        # no cache if parent, because currently unique parent.id is unknown
-        return CategoryTreeNode(var['depth'], var['parent'], var['as'])
-    # Use a per-process cache of the CategoryTreeNode instance
-    key = "".join(var.values())
-    if key in NODE_CACHE:
-        return NODE_CACHE[key]
+    if max_depth is not None:
+        categories = categories.filter(depth__lte=max_depth)
 
-    NODE_CACHE[key] = CategoryTreeNode(var['depth'], var['parent'], var['as'])
-    return NODE_CACHE[key]
+    info = CheapCategoryInfo(parent, url="")
 
+    for node in categories:
+        node_depth = node.get_depth()
+        if start_depth is None:
+            start_depth = node_depth
 
-class CategoryTreeNode(template.Node):
-    def __init__(self, depth_var, parent_var, as_var):
-        self.depth_var = template.Variable(depth_var)
-        if parent_var:
-            self.parent_var = template.Variable(parent_var)
-        else:
-            self.parent_var = None
-        self.as_var = as_var
+        # Update previous node's info
+        if prev_depth is None or node_depth > prev_depth:
+            info["has_children"] = True
+            if info.category is not None:
+                tree_slug = info.category.get_full_slug(tree_slug)
 
-    def get_annotated_list(self, max_depth=None, parent=None):
-        """
-        Gets an annotated list from a tree branch.
+        if prev_depth is not None and node_depth < prev_depth:
+            depth_difference = prev_depth - node_depth
+            info["num_to_close"] = list(range(0, depth_difference))
+            tree_slugs = tree_slug.rsplit(node._slug_separator, depth_difference)
+            if tree_slugs:
+                tree_slug = tree_slugs[0]
+            else:
+                tree_slug = node.slug
 
-        Borrows heavily from treebeard's get_annotated_list
-        """
-        annotated_categories = []
+        info = CheapCategoryInfo(
+            node,
+            url=node._get_absolute_url(tree_slug),
+            num_to_close=[],
+            level=node_depth - start_depth,
+        )
+        annotated_categories.append(info)
 
-        start_depth, prev_depth = (None, None)
-        if parent:
-            categories = parent.get_descendants()
-            if max_depth is not None:
-                max_depth += parent.get_depth()
-        else:
-            categories = Category.get_tree()
+        prev_depth = node_depth
 
-        info = {}
-        for node in categories:
-            depth = node.get_depth()
-            if start_depth is None:
-                start_depth = depth
-            if max_depth is not None and depth > max_depth:
-                continue
+    if prev_depth is not None:
+        # close last leaf
+        info['num_to_close'] = list(range(0, prev_depth - start_depth))
+        info['has_children'] = prev_depth > prev_depth
 
-            # Update previous node's info
-            info['has_children'] = prev_depth is None or depth > prev_depth
-            if prev_depth is not None and depth < prev_depth:
-                info['num_to_close'] = list(range(0, prev_depth - depth))
-
-            info = {'num_to_close': [],
-                    'level': depth - start_depth}
-            annotated_categories.append((node, info,))
-            prev_depth = depth
-
-        if prev_depth is not None:
-            # close last leaf
-            info['num_to_close'] = list(range(0, prev_depth - start_depth))
-            info['has_children'] = prev_depth > prev_depth
-
-        return annotated_categories
-
-    def render(self, context):
-        depth = int(self.depth_var.resolve(context))
-        if self.parent_var:
-            parent = self.parent_var.resolve(context)
-        else:
-            parent = None
-        annotated_list = self.get_annotated_list(
-            max_depth=depth or None, parent=parent)
-        context[self.as_var] = annotated_list
-        return ''
+    return annotated_categories

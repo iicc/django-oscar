@@ -1,13 +1,16 @@
+from django.conf import settings
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext_lazy as _, ugettext_noop
-
-from django_tables2 import Column, LinkColumn, TemplateColumn, A
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import ungettext_lazy
+from django_tables2 import A, Column, LinkColumn, TemplateColumn
 
 from oscar.core.loading import get_class, get_model
 
 DashboardTable = get_class('dashboard.tables', 'DashboardTable')
 Product = get_model('catalogue', 'Product')
 Category = get_model('catalogue', 'Category')
+AttributeOptionGroup = get_model('catalogue', 'AttributeOptionGroup')
+Option = get_model('catalogue', 'Option')
 
 
 class ProductTable(DashboardTable):
@@ -64,9 +67,52 @@ class CategoryTable(DashboardTable):
         orderable=False)
 
     icon = "sitemap"
-    caption_singular = ugettext_noop("{count} Category")
-    caption_plural = ugettext_noop("{count} Categories")
+    caption = ungettext_lazy("%s Category", "%s Categories")
 
     class Meta(DashboardTable.Meta):
         model = Category
         fields = ('name', 'description')
+
+
+class AttributeOptionGroupTable(DashboardTable):
+    name = TemplateColumn(
+        verbose_name=_('Name'),
+        template_name='dashboard/catalogue/attribute_option_group_row_name.html',
+        order_by='name')
+    option_summary = TemplateColumn(
+        verbose_name=_('Option summary'),
+        template_name='dashboard/catalogue/attribute_option_group_row_option_summary.html',
+        orderable=False)
+    actions = TemplateColumn(
+        verbose_name=_('Actions'),
+        template_name='dashboard/catalogue/attribute_option_group_row_actions.html',
+        orderable=False)
+
+    icon = "sitemap"
+    caption = ungettext_lazy("%s Attribute Option Group", "%s Attribute Option Groups")
+
+    class Meta(DashboardTable.Meta):
+        model = AttributeOptionGroup
+        fields = ('name',)
+        sequence = ('name', 'option_summary', 'actions')
+        per_page = settings.OSCAR_DASHBOARD_ITEMS_PER_PAGE
+
+
+class OptionTable(DashboardTable):
+    name = TemplateColumn(
+        verbose_name=_('Name'),
+        template_name='dashboard/catalogue/option_row_name.html',
+        order_by='name')
+    actions = TemplateColumn(
+        verbose_name=_('Actions'),
+        template_name='dashboard/catalogue/option_row_actions.html',
+        orderable=False)
+
+    icon = "reorder"
+    caption = ungettext_lazy("%s Option", "%s Options")
+
+    class Meta(DashboardTable.Meta):
+        model = Option
+        fields = ('name', 'type')
+        sequence = ('name', 'type', 'actions')
+        per_page = settings.OSCAR_DASHBOARD_ITEMS_PER_PAGE

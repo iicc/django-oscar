@@ -1,21 +1,22 @@
 import string
-import random
 
 from django import forms
 from django.conf import settings
 from django.contrib.auth import forms as auth_forms
 from django.contrib.auth.forms import AuthenticationForm
-from django.contrib.sites.models import get_current_site
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.sites.shortcuts import get_current_site
 from django.core.exceptions import ValidationError
+from django.utils.crypto import get_random_string
 from django.utils.http import is_safe_url
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
 
-from oscar.core.loading import get_profile_class, get_class, get_model
-from oscar.core.compat import get_user_model, existing_user_fields
 from oscar.apps.customer.utils import get_password_reset_url, normalise_email
-from oscar.core.validators import password_validators
-
+from oscar.core.compat import (
+    existing_user_fields, get_user_model)
+from oscar.core.loading import get_class, get_model, get_profile_class
+from oscar.forms import widgets
 
 Dispatcher = get_class('customer.utils', 'Dispatcher')
 CommunicationEventType = get_model('customer', 'communicationeventtype')
@@ -24,13 +25,9 @@ User = get_user_model()
 
 
 def generate_username():
-    # Python 3 uses ascii_letters. If not available, fallback to letters
-    try:
-        letters = string.ascii_letters
-    except AttributeError:
-        letters = string.letters
-    uname = ''.join([random.choice(letters + string.digits + '_')
-                     for i in range(30)])
+    letters = string.ascii_letters
+    allowed_chars = letters + string.digits + '_'
+    uname = get_random_string(length=30, allowed_chars=allowed_chars)
     try:
         User.objects.get(username=uname)
         return generate_username()
@@ -77,20 +74,6 @@ class PasswordResetForm(auth_forms.PasswordResetForm):
         return reset_url
 
 
-class SetPasswordForm(auth_forms.SetPasswordForm):
-    def __init__(self, *args, **kwargs):
-        super(SetPasswordForm, self).__init__(*args, **kwargs)
-        # Enforce password validations for the new password
-        self.fields['new_password1'].validators += password_validators
-
-
-class PasswordChangeForm(auth_forms.PasswordChangeForm):
-    def __init__(self, *args, **kwargs):
-        super(PasswordChangeForm, self).__init__(*args, **kwargs)
-        # Enforce password validations for the new password
-        self.fields['new_password1'].validators += password_validators
-
-
 class EmailAuthenticationForm(AuthenticationForm):
     """
     Extends the standard django AuthenticationForm, to support 75 character
@@ -103,11 +86,11 @@ class EmailAuthenticationForm(AuthenticationForm):
 
     def __init__(self, host, *args, **kwargs):
         self.host = host
-        super(EmailAuthenticationForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def clean_redirect_url(self):
         url = self.cleaned_data['redirect_url'].strip()
-        if url and is_safe_url(url):
+        if url and is_safe_url(url, self.host):
             return url
 
 
@@ -120,7 +103,7 @@ class ConfirmPasswordForm(forms.Form):
     password = forms.CharField(label=_("Password"), widget=forms.PasswordInput)
 
     def __init__(self, user, *args, **kwargs):
-        super(ConfirmPasswordForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.user = user
 
     def clean_password(self):
@@ -134,8 +117,7 @@ class ConfirmPasswordForm(forms.Form):
 class EmailUserCreationForm(forms.ModelForm):
     email = forms.EmailField(label=_('Email address'))
     password1 = forms.CharField(
-        label=_('Password'), widget=forms.PasswordInput,
-        validators=password_validators)
+        label=_('Password'), widget=forms.PasswordInput)
     password2 = forms.CharField(
         label=_('Confirm password'), widget=forms.PasswordInput)
     redirect_url = forms.CharField(
@@ -147,7 +129,19 @@ class EmailUserCreationForm(forms.ModelForm):
 
     def __init__(self, host=None, *args, **kwargs):
         self.host = host
-        super(EmailUserCreationForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
+
+    def _post_clean(self):
+        super()._post_clean()
+        password = self.cleaned_data.get('password2')
+        # Validate after self.instance is updated with form data
+        # otherwise validators can't access email
+        # see django.contrib.auth.forms.UserCreationForm
+        if password:
+            try:
+                validate_password(password, self.instance)
+            except forms.ValidationError as error:
+                self.add_error('password2', error)
 
     def clean_email(self):
         """
@@ -169,12 +163,12 @@ class EmailUserCreationForm(forms.ModelForm):
 
     def clean_redirect_url(self):
         url = self.cleaned_data['redirect_url'].strip()
-        if url and is_safe_url(url):
+        if url and is_safe_url(url, self.host):
             return url
         return settings.LOGIN_REDIRECT_URL
 
     def save(self, commit=True):
-        user = super(EmailUserCreationForm, self).save(commit=False)
+        user = super().save(commit=False)
         user.set_password(self.cleaned_data['password1'])
 
         if 'username' in [f.name for f in User._meta.fields]:
@@ -186,9 +180,11 @@ class EmailUserCreationForm(forms.ModelForm):
 
 class OrderSearchForm(forms.Form):
     date_from = forms.DateField(
-        required=False, label=pgettext_lazy("start date", "From"))
+        required=False, label=pgettext_lazy("start date", "From"),
+        widget=widgets.DatePickerInput())
     date_to = forms.DateField(
-        required=False, label=pgettext_lazy("end date", "To"))
+        required=False, label=pgettext_lazy("end date", "To"),
+        widget=widgets.DatePickerInput())
     order_number = forms.CharField(required=False, label=_("Order number"))
 
     def clean(self):
@@ -196,7 +192,7 @@ class OrderSearchForm(forms.Form):
                                         self.cleaned_data['date_to'],
                                         self.cleaned_data['order_number']]):
             raise forms.ValidationError(_("At least one field is required."))
-        return super(OrderSearchForm, self).clean()
+        return super().clean()
 
     def description(self):
         """
@@ -264,7 +260,7 @@ class UserForm(forms.ModelForm):
     def __init__(self, user, *args, **kwargs):
         self.user = user
         kwargs['instance'] = user
-        super(UserForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         if 'email' in self.fields:
             self.fields['email'].required = True
 
@@ -289,7 +285,7 @@ class UserForm(forms.ModelForm):
 
 
 Profile = get_profile_class()
-if Profile:
+if Profile:  # noqa (too complex (12))
 
     class UserAndProfileForm(forms.ModelForm):
 
@@ -301,7 +297,7 @@ if Profile:
                 instance = Profile(user=user)
             kwargs['instance'] = instance
 
-            super(UserAndProfileForm, self).__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
 
             # Get profile field names to help with ordering later
             profile_field_names = list(self.fields.keys())
@@ -354,7 +350,7 @@ if Profile:
                 setattr(user, field_name, self.cleaned_data[field_name])
             user.save()
 
-            return super(ProfileForm, self).save(*args, **kwargs)
+            return super().save(*args, **kwargs)
 
     ProfileForm = UserAndProfileForm
 else:
@@ -362,7 +358,7 @@ else:
 
 
 class ProductAlertForm(forms.ModelForm):
-    email = forms.EmailField(required=True, label=_(u'Send notification to'),
+    email = forms.EmailField(required=True, label=_('Send notification to'),
                              widget=forms.TextInput(attrs={
                                  'placeholder': _('Enter your email')
                              }))
@@ -370,16 +366,16 @@ class ProductAlertForm(forms.ModelForm):
     def __init__(self, user, product, *args, **kwargs):
         self.user = user
         self.product = product
-        super(ProductAlertForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         # Only show email field to unauthenticated users
-        if user and user.is_authenticated():
+        if user and user.is_authenticated:
             self.fields['email'].widget = forms.HiddenInput()
             self.fields['email'].required = False
 
     def save(self, commit=True):
-        alert = super(ProductAlertForm, self).save(commit=False)
-        if self.user.is_authenticated():
+        alert = super().save(commit=False)
+        if self.user.is_authenticated:
             alert.user = self.user
         alert.product = self.product
         if commit:
@@ -399,7 +395,17 @@ class ProductAlertForm(forms.ModelForm):
             else:
                 raise forms.ValidationError(_(
                     "There is already an active stock alert for %s") % email)
-        elif self.user.is_authenticated():
+
+            # Check that the email address hasn't got other unconfirmed alerts.
+            # If they do then we don't want to spam them with more until they
+            # have confirmed or cancelled the existing alert.
+            if ProductAlert.objects.filter(email__iexact=email,
+                                           status=ProductAlert.UNCONFIRMED).count():
+                raise forms.ValidationError(_(
+                    "%s has been sent a confirmation email for another product "
+                    "alert on this site. Please confirm or cancel that request "
+                    "before signing up for more alerts.") % email)
+        elif self.user.is_authenticated:
             try:
                 ProductAlert.objects.get(product=self.product,
                                          user=self.user,
@@ -413,6 +419,4 @@ class ProductAlertForm(forms.ModelForm):
 
     class Meta:
         model = ProductAlert
-        exclude = ('user', 'key',
-                   'status', 'date_confirmed', 'date_cancelled', 'date_closed',
-                   'product')
+        fields = ['email']

@@ -7,11 +7,9 @@
     <ul class="breadcrumb">
         <li>
             <a href="{% url 'dashboard:index' %}">{% trans "Dashboard" %}</a>
-            <span class="divider">/</span>
         </li>
         <li>
         <a href="{% if parent %}{% url 'dashboard:catalogue-category-detail-list' pk=parent.pk %}{% else %}{% url 'dashboard:catalogue-category-list' %}{% endif %}">{% trans "Categories" %}</a>
-        <span class="divider">/</span>
     </li>
     <li class="active">{% trans "Delete category?" %}</li>
 </ul>
@@ -25,7 +23,7 @@
     <div class="table-header">
         <h2>{% trans "Delete category" %}</h2>
     </div>
-    <form action="." method="post" class="well">
+    <form method="post" class="well">
         {% csrf_token %}
         {{ form }}
         {% blocktrans with name=object.name %}

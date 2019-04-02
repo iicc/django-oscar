@@ -22,12 +22,15 @@ import os
 oscar_folder = os.path.realpath(
     os.path.join(os.path.dirname(__file__), '../..'))
 sandbox_folder = os.path.realpath(
-    os.path.join(os.path.dirname(__file__), '../../sites/sandbox'))
+    os.path.join(os.path.dirname(__file__), '../../sandbox'))
 sys.path.append(oscar_folder)
 sys.path.append(sandbox_folder)
 
 # Specify settings module (which will be picked up from the sandbox)
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings_sphinx')
+
+import django
+django.setup()
 
 # -- General configuration -----------------------------------------------------
 
@@ -42,6 +45,7 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.viewcode',
     'sphinxcontrib.napoleon',
+    'sphinx_issues',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -57,7 +61,7 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'django-oscar'
+project = 'django-oscar'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -101,6 +105,9 @@ pygments_style = 'sphinx'
 
 # A list of ignored prefixes for module index sorting.
 #modindex_common_prefix = []
+
+# Github repo for sphinx-issues
+issues_github_path = 'django-oscar/django-oscar'
 
 
 # -- Options for HTML output ---------------------------------------------------
@@ -201,8 +208,8 @@ htmlhelp_basename = 'django-oscardoc'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 latex_documents = [
-  ('index', 'django-oscar.tex', u'django-oscar Documentation',
-   u'David Winterbottom', 'manual'),
+  ('index', 'django-oscar.tex', 'django-oscar Documentation',
+   'David Winterbottom', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -234,8 +241,8 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    ('index', 'django-oscar', u'django-oscar Documentation',
-     [u'David Winterbottom'], 1)
+    ('index', 'django-oscar', 'django-oscar Documentation',
+     ['David Winterbottom'], 1)
 ]
 
 # Autodoc settings
@@ -246,7 +253,7 @@ autoclass_content = 'class'
 
 import inspect
 from django.utils.html import strip_tags
-from django.utils.encoding import force_unicode
+from django.utils.encoding import force_text
 
 
 def process_docstring(app, what, name, obj, options, lines):
@@ -265,23 +272,23 @@ def process_docstring(app, what, name, obj, options, lines):
 
         for field in fields:
             # Decode and strip any html out of the field's help text
-            help_text = strip_tags(force_unicode(field.help_text))
+            help_text = strip_tags(force_text(field.help_text))
 
             # Decode and capitalize the verbose name, for use if there isn't
             # any help text
-            verbose_name = force_unicode(field.verbose_name).capitalize()
+            verbose_name = force_text(field.verbose_name).capitalize()
 
             if help_text:
                 # Add the model field to the end of the docstring as a param
                 # using the help text as the description
-                lines.append(u':param %s: %s' % (field.attname, help_text))
+                lines.append(':param %s: %s' % (field.attname, help_text))
             else:
                 # Add the model field to the end of the docstring as a param
                 # using the verbose name as the description
-                lines.append(u':param %s: %s' % (field.attname, verbose_name))
+                lines.append(':param %s: %s' % (field.attname, verbose_name))
 
             # Add the field's type to the docstring
-            lines.append(u':type %s: %s' % (field.attname, type(field).__name__))
+            lines.append(':type %s: %s' % (field.attname, type(field).__name__))
 
     # Return the extended docstring
     return lines

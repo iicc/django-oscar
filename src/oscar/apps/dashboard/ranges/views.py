@@ -3,17 +3,18 @@ import os
 from django.conf import settings
 from django.contrib import messages
 from django.core import exceptions
-from django.core.urlresolvers import reverse
+from django.db.models import Count
 from django.http import HttpResponseRedirect
-from django.shortcuts import get_object_or_404, HttpResponse
+from django.shortcuts import HttpResponse, get_object_or_404
 from django.template.loader import render_to_string
-from django.utils.translation import ungettext, ugettext_lazy as _
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import ungettext
 from django.views.generic import (
-    ListView, DeleteView, CreateView, UpdateView, View)
+    CreateView, DeleteView, ListView, UpdateView, View)
 
-
-from oscar.views.generic import BulkEditMixin
 from oscar.core.loading import get_classes, get_model
+from oscar.views.generic import BulkEditMixin
 
 Range = get_model('offer', 'Range')
 RangeProduct = get_model('offer', 'RangeProduct')
@@ -27,6 +28,7 @@ class RangeListView(ListView):
     model = Range
     context_object_name = 'ranges'
     template_name = 'dashboard/ranges/range_list.html'
+    paginate_by = settings.OSCAR_DASHBOARD_ITEMS_PER_PAGE
 
 
 class RangeCreateView(CreateView):
@@ -46,7 +48,7 @@ class RangeCreateView(CreateView):
             return reverse('dashboard:range-list')
 
     def get_context_data(self, **kwargs):
-        ctx = super(RangeCreateView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['title'] = _("Create range")
         return ctx
 
@@ -57,7 +59,7 @@ class RangeUpdateView(UpdateView):
     form_class = RangeForm
 
     def get_object(self):
-        obj = super(RangeUpdateView, self).get_object()
+        obj = super().get_object()
         if not obj.is_editable:
             raise exceptions.PermissionDenied("Not allowed")
         return obj
@@ -74,7 +76,7 @@ class RangeUpdateView(UpdateView):
             return reverse('dashboard:range-list')
 
     def get_context_data(self, **kwargs):
-        ctx = super(RangeUpdateView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         ctx['range'] = self.object
         ctx['title'] = self.object.name
         return ctx
@@ -96,12 +98,13 @@ class RangeProductListView(BulkEditMixin, ListView):
     context_object_name = 'products'
     actions = ('remove_selected_products', 'add_products')
     form_class = RangeProductForm
+    paginate_by = settings.OSCAR_DASHBOARD_ITEMS_PER_PAGE
 
     def post(self, request, *args, **kwargs):
         self.object_list = self.get_queryset()
         if request.POST.get('action', None) == 'add_products':
             return self.add_products(request)
-        return super(RangeProductListView, self).post(request, *args, **kwargs)
+        return super().post(request, *args, **kwargs)
 
     def get_range(self):
         if not hasattr(self, '_range'):
@@ -109,11 +112,11 @@ class RangeProductListView(BulkEditMixin, ListView):
         return self._range
 
     def get_queryset(self):
-        products = self.get_range().included_products.all()
+        products = self.get_range().all_products()
         return products.order_by('rangeproduct__display_order')
 
     def get_context_data(self, **kwargs):
-        ctx = super(RangeProductListView, self).get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         range = self.get_range()
         ctx['range'] = range
         if 'form' not in ctx:
@@ -167,12 +170,13 @@ class RangeProductListView(BulkEditMixin, ListView):
                 request,
                 _("No product(s) were found with SKU or UPC matching %s") %
                 ", ".join(missing_skus))
+        self.check_imported_products_sku_duplicates(request, products)
 
     def handle_file_products(self, request, range, form):
         if 'file_upload' not in request.FILES:
             return
         upload = self.create_upload_object(request, range)
-        upload.process()
+        products = upload.process()
         if not upload.was_processing_successful():
             messages.error(request, upload.error_message)
         else:
@@ -182,6 +186,7 @@ class RangeProductListView(BulkEditMixin, ListView):
                  'upload': upload})
             messages.success(request, msg, extra_tags='safe noicon block')
         upload.delete_file()
+        self.check_imported_products_sku_duplicates(request, products)
 
     def create_upload_object(self, request, range):
         f = request.FILES['file_upload']
@@ -197,10 +202,22 @@ class RangeProductListView(BulkEditMixin, ListView):
         )
         return upload
 
+    def check_imported_products_sku_duplicates(self, request, queryset):
+        dupe_sku_products = queryset.values('stockrecords__partner_sku')\
+                                    .annotate(total=Count('stockrecords__partner_sku'))\
+                                    .filter(total__gt=1).order_by('stockrecords__partner_sku')
+        if dupe_sku_products:
+            dupe_skus = [p['stockrecords__partner_sku'] for p in dupe_sku_products]
+            messages.warning(
+                request,
+                _("There are more than one product with SKU %s") %
+                ", ".join(dupe_skus)
+            )
+
 
 class RangeReorderView(View):
     def post(self, request, pk):
-        order = dict(request.POST).get('product[]')
+        order = dict(request.POST).get('product')
         self._save_page_order(order)
         return HttpResponse(status=200)
 

@@ -1,25 +1,28 @@
 import datetime
 
 from django import forms
-from oscar.core.loading import get_model
 from django.http import QueryDict
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
-from oscar.apps.address.forms import AbstractAddressForm
 
-from oscar.views.generic import PhoneNumberMixin
+from oscar.core.loading import get_class, get_model
+from oscar.forms.mixins import PhoneNumberMixin
+from oscar.forms.widgets import DatePickerInput
 
 Order = get_model('order', 'Order')
 OrderNote = get_model('order', 'OrderNote')
 ShippingAddress = get_model('order', 'ShippingAddress')
 SourceType = get_model('payment', 'SourceType')
+AbstractAddressForm = get_class('address.forms', 'AbstractAddressForm')
 
 
 class OrderStatsForm(forms.Form):
     date_from = forms.DateField(
-        required=False, label=pgettext_lazy(u"start date", u"From"))
+        required=False, label=pgettext_lazy("start date", "From"),
+        widget=DatePickerInput)
     date_to = forms.DateField(
-        required=False, label=pgettext_lazy(u"end date", u"To"))
+        required=False, label=pgettext_lazy("end date", "To"),
+        widget=DatePickerInput)
 
     _filters = _description = None
 
@@ -74,8 +77,10 @@ class OrderSearchForm(forms.Form):
     status = forms.ChoiceField(choices=status_choices, label=_("Status"),
                                required=False)
 
-    date_from = forms.DateField(required=False, label=_("Date from"))
-    date_to = forms.DateField(required=False, label=_("Date to"))
+    date_from = forms.DateField(
+        required=False, label=_("Date from"), widget=DatePickerInput)
+    date_to = forms.DateField(
+        required=False, label=_("Date to"), widget=DatePickerInput)
 
     voucher = forms.CharField(required=False, label=_("Voucher code"))
 
@@ -108,7 +113,7 @@ class OrderSearchForm(forms.Form):
                     data = data.dict()
                 data['response_format'] = 'html'
 
-        super(OrderSearchForm, self).__init__(data, *args, **kwargs)
+        super().__init__(data, *args, **kwargs)
         self.fields['payment_method'].choices = self.payment_method_choices()
 
     def payment_method_choices(self):
@@ -120,10 +125,10 @@ class OrderNoteForm(forms.ModelForm):
 
     class Meta:
         model = OrderNote
-        exclude = ('order', 'user', 'note_type')
+        fields = ['message']
 
     def __init__(self, order, user, *args, **kwargs):
-        super(OrderNoteForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.instance.order = order
         self.instance.user = user
 
@@ -132,14 +137,19 @@ class ShippingAddressForm(PhoneNumberMixin, AbstractAddressForm):
 
     class Meta:
         model = ShippingAddress
-        exclude = ('search_text',)
+        fields = [
+            'title', 'first_name', 'last_name',
+            'line1', 'line2', 'line3', 'line4',
+            'state', 'postcode', 'country',
+            'phone_number', 'notes',
+        ]
 
 
 class OrderStatusForm(forms.Form):
     new_status = forms.ChoiceField(label=_("New order status"), choices=())
 
     def __init__(self, order, *args, **kwargs):
-        super(OrderStatusForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         # Set the choices
         choices = [(x, x) for x in order.available_statuses()]

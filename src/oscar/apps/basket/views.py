@@ -1,88 +1,32 @@
-import json
-
 from django import shortcuts
 from django.contrib import messages
+from django.core.exceptions import ObjectDoesNotExist
+from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.template.loader import render_to_string
-from django.template import RequestContext
-from django.core.urlresolvers import reverse
-from django.http import HttpResponse
-from django.views.generic import FormView, View
+from django.urls import reverse
 from django.utils.http import is_safe_url
-from django.utils.translation import ugettext_lazy as _
-from django.core.exceptions import ObjectDoesNotExist
-
+from django.utils.translation import gettext_lazy as _
+from django.views.generic import FormView, View
 from extra_views import ModelFormSetView
 
+from oscar.apps.basket.signals import (
+    basket_addition, voucher_addition, voucher_removal)
 from oscar.core import ajax
-from oscar.core.utils import redirect_to_referrer, safe_referrer
-from oscar.apps.basket import signals
 from oscar.core.loading import get_class, get_classes, get_model
+from oscar.core.utils import redirect_to_referrer, safe_referrer
 
-Applicator = get_class('offer.utils', 'Applicator')
-(BasketLineFormSet, BasketLineForm, AddToBasketForm, BasketVoucherForm,
- SavedLineFormSet, SavedLineForm) \
-    = get_classes('basket.forms', ('BasketLineFormSet', 'BasketLineForm',
-                                   'AddToBasketForm', 'BasketVoucherForm',
-                                   'SavedLineFormSet', 'SavedLineForm'))
-Repository = get_class('shipping.repository', ('Repository'))
+Applicator = get_class('offer.applicator', 'Applicator')
+(BasketLineForm, AddToBasketForm, BasketVoucherForm, SavedLineForm) = get_classes(
+    'basket.forms', ('BasketLineForm', 'AddToBasketForm',
+                     'BasketVoucherForm', 'SavedLineForm'))
+BasketLineFormSet, SavedLineFormSet = get_classes(
+    'basket.formsets', ('BasketLineFormSet', 'SavedLineFormSet'))
+Repository = get_class('shipping.repository', 'Repository')
+
 OrderTotalCalculator = get_class(
     'checkout.calculators', 'OrderTotalCalculator')
-
-
-def get_messages(basket, offers_before, offers_after,
-                 include_buttons=True):
-    """
-    Return the messages about offer changes
-    """
-    # Look for changes in offers
-    offers_lost = set(offers_before.keys()).difference(
-        set(offers_after.keys()))
-    offers_gained = set(offers_after.keys()).difference(
-        set(offers_before.keys()))
-
-    # Build a list of (level, msg) tuples
-    offer_messages = []
-    for offer_id in offers_lost:
-        offer = offers_before[offer_id]
-        msg = render_to_string(
-            'basket/messages/offer_lost.html',
-            {'offer': offer})
-        offer_messages.append((
-            messages.WARNING, msg))
-    for offer_id in offers_gained:
-        offer = offers_after[offer_id]
-        msg = render_to_string(
-            'basket/messages/offer_gained.html',
-            {'offer': offer})
-        offer_messages.append((
-            messages.SUCCESS, msg))
-
-    # We use the 'include_buttons' parameter to determine whether to show the
-    # 'Checkout now' buttons.  We don't want to show these on the basket page.
-    msg = render_to_string(
-        'basket/messages/new_total.html',
-        {'basket': basket,
-         'include_buttons': include_buttons})
-    offer_messages.append((
-        messages.INFO, msg))
-
-    return offer_messages
-
-
-def apply_messages(request, offers_before):
-    """
-    Set flash messages triggered by changes to the basket
-    """
-    # Re-apply offers to see if any new ones are now available
-    request.basket.reset_offer_applications()
-    Applicator().apply(request, request.basket)
-    offers_after = request.basket.applied_offers()
-
-    for level, msg in get_messages(
-            request.basket, offers_before, offers_after):
-        messages.add_message(
-            request, level, msg, extra_tags='safe noicon')
+BasketMessageGenerator = get_class('basket.utils', 'BasketMessageGenerator')
 
 
 class BasketView(ModelFormSetView):
@@ -90,12 +34,14 @@ class BasketView(ModelFormSetView):
     basket_model = get_model('basket', 'Basket')
     formset_class = BasketLineFormSet
     form_class = BasketLineForm
-    extra = 0
-    can_delete = True
+    factory_kwargs = {
+        'extra': 0,
+        'can_delete': True
+    }
     template_name = 'basket/basket.html'
 
     def get_formset_kwargs(self):
-        kwargs = super(BasketView, self).get_formset_kwargs()
+        kwargs = super().get_formset_kwargs()
         kwargs['strategy'] = self.request.strategy
         return kwargs
 
@@ -107,10 +53,14 @@ class BasketView(ModelFormSetView):
             basket=self.request.basket, user=self.request.user,
             request=self.request)
 
+    def get_default_shipping_address(self):
+        if self.request.user.is_authenticated:
+            return self.request.user.addresses.filter(is_default_for_shipping=True).first()
+
     def get_default_shipping_method(self, basket):
         return Repository().get_default_shipping_method(
             basket=self.request.basket, user=self.request.user,
-            request=self.request)
+            request=self.request, shipping_addr=self.get_default_shipping_address())
 
     def get_basket_warnings(self, basket):
         """
@@ -124,7 +74,8 @@ class BasketView(ModelFormSetView):
         return warnings
 
     def get_upsell_messages(self, basket):
-        offers = Applicator().get_offers(self.request, basket)
+        offers = Applicator().get_offers(basket, self.request.user,
+                                         self.request)
         applied_offers = list(basket.offer_applications.offers.values())
         msgs = []
         for offer in offers:
@@ -144,7 +95,7 @@ class BasketView(ModelFormSetView):
         return BasketVoucherForm()
 
     def get_context_data(self, **kwargs):
-        context = super(BasketView, self).get_context_data(**kwargs)
+        context = super().get_context_data(**kwargs)
         context['voucher_form'] = self.get_basket_voucher_form()
 
         # Shipping information is included to give an idea of the total order
@@ -158,7 +109,7 @@ class BasketView(ModelFormSetView):
         shipping_charge = method.calculate(self.request.basket)
         context['shipping_charge'] = shipping_charge
         if method.is_discounted:
-            excl_discount = method.calculate_excl_discount(shipping_charge)
+            excl_discount = method.calculate_excl_discount(self.request.basket)
             context['shipping_charge_excl_discount'] = excl_discount
 
         context['order_total'] = OrderTotalCalculator().calculate(
@@ -168,7 +119,7 @@ class BasketView(ModelFormSetView):
         context['upsell_messages'] = self.get_upsell_messages(
             self.request.basket)
 
-        if self.request.user.is_authenticated():
+        if self.request.user.is_authenticated:
             try:
                 saved_basket = self.basket_model.saved.get(
                     owner=self.request.user)
@@ -177,8 +128,7 @@ class BasketView(ModelFormSetView):
             else:
                 saved_basket.strategy = self.request.basket.strategy
                 if not saved_basket.is_empty:
-                    saved_queryset = saved_basket.all_lines().select_related(
-                        'product', 'product__stockrecord')
+                    saved_queryset = saved_basket.all_lines()
                     formset = SavedLineFormSet(strategy=self.request.strategy,
                                                basket=self.request.basket,
                                                queryset=saved_queryset,
@@ -187,7 +137,7 @@ class BasketView(ModelFormSetView):
         return context
 
     def get_success_url(self):
-        return safe_referrer(self.request.META, 'basket:summary')
+        return safe_referrer(self.request, 'basket:summary')
 
     def formset_valid(self, formset):
         # Store offers before any changes are made so we can inform the user of
@@ -201,10 +151,10 @@ class BasketView(ModelFormSetView):
         flash_messages = ajax.FlashMessages()
 
         for form in formset:
-            if (hasattr(form, 'cleaned_data') and
-                    form.cleaned_data['save_for_later']):
+            if (hasattr(form, 'cleaned_data')
+                    and form.cleaned_data['save_for_later']):
                 line = form.instance
-                if self.request.user.is_authenticated():
+                if self.request.user.is_authenticated:
                     self.move_line_to_saved_basket(line)
 
                     msg = render_to_string(
@@ -224,7 +174,7 @@ class BasketView(ModelFormSetView):
             response = redirect(self.get_success_url())
         else:
             # Save changes to basket as per normal
-            response = super(BasketView, self).formset_valid(formset)
+            response = super().formset_valid(formset)
 
         # If AJAX submission, don't redirect but reload the basket content HTML
         if self.request.is_ajax():
@@ -232,12 +182,12 @@ class BasketView(ModelFormSetView):
             self.request.basket = get_model('basket', 'Basket').objects.get(
                 id=self.request.basket.id)
             self.request.basket.strategy = self.request.strategy
-            Applicator().apply(self.request, self.request.basket)
+            Applicator().apply(self.request.basket, self.request.user,
+                               self.request)
             offers_after = self.request.basket.applied_offers()
 
-            for level, msg in get_messages(
-                    self.request.basket, offers_before,
-                    offers_after, include_buttons=False):
+            for level, msg in BasketMessageGenerator().get_messages(
+                    self.request.basket, offers_before, offers_after, include_buttons=False):
                 flash_messages.add_message(level, msg)
 
             # Reload formset - we have to remove the POST fields from the
@@ -255,19 +205,19 @@ class BasketView(ModelFormSetView):
                                         basket=self.request.basket)
             return self.json_response(ctx, flash_messages)
 
-        apply_messages(self.request, offers_before)
+        BasketMessageGenerator().apply_messages(self.request, offers_before)
 
         return response
 
     def json_response(self, ctx, flash_messages):
         basket_html = render_to_string(
             'basket/partials/basket_content.html',
-            RequestContext(self.request, ctx))
-        payload = {
+            context=ctx, request=self.request)
+
+        return JsonResponse({
             'content_html': basket_html,
-            'messages': flash_messages.as_dict()}
-        return HttpResponse(json.dumps(payload),
-                            content_type="application/json")
+            'messages': flash_messages.as_dict()
+        })
 
     def move_line_to_saved_basket(self, line):
         saved_basket, _ = get_model('basket', 'basket').saved.get_or_create(
@@ -276,7 +226,9 @@ class BasketView(ModelFormSetView):
 
     def formset_invalid(self, formset):
         flash_messages = ajax.FlashMessages()
-        flash_messages.warning(_("Your basket couldn't be updated"))
+        flash_messages.warning(_(
+            "Your basket couldn't be updated. "
+            "Please correct any validation errors below."))
 
         if self.request.is_ajax():
             ctx = self.get_context_data(formset=formset,
@@ -284,7 +236,7 @@ class BasketView(ModelFormSetView):
             return self.json_response(ctx, flash_messages)
 
         flash_messages.apply_to_request(self.request)
-        return super(BasketView, self).formset_invalid(formset)
+        return super().formset_invalid(formset)
 
 
 class BasketAddView(FormView):
@@ -295,16 +247,16 @@ class BasketAddView(FormView):
     """
     form_class = AddToBasketForm
     product_model = get_model('catalogue', 'product')
-    add_signal = signals.basket_addition
+    add_signal = basket_addition
     http_method_names = ['post']
 
     def post(self, request, *args, **kwargs):
         self.product = shortcuts.get_object_or_404(
             self.product_model, pk=kwargs['pk'])
-        return super(BasketAddView, self).post(request, *args, **kwargs)
+        return super().post(request, *args, **kwargs)
 
     def get_form_kwargs(self):
-        kwargs = super(BasketAddView, self).get_form_kwargs()
+        kwargs = super().get_form_kwargs()
         kwargs['basket'] = self.request.basket
         kwargs['product'] = self.product
         return kwargs
@@ -316,7 +268,7 @@ class BasketAddView(FormView):
         clean_msgs = [m.replace('* ', '') for m in msgs if m.startswith('* ')]
         messages.error(self.request, ",".join(clean_msgs))
 
-        return redirect_to_referrer(self.request.META, 'basket:summary')
+        return redirect_to_referrer(self.request, 'basket:summary')
 
     def form_valid(self, form):
         offers_before = self.request.basket.applied_offers()
@@ -329,14 +281,14 @@ class BasketAddView(FormView):
                          extra_tags='safe noicon')
 
         # Check for additional offer messages
-        apply_messages(self.request, offers_before)
+        BasketMessageGenerator().apply_messages(self.request, offers_before)
 
         # Send signal for basket addition
         self.add_signal.send(
             sender=self, product=form.product, user=self.request.user,
             request=self.request)
 
-        return super(BasketAddView, self).form_valid(form)
+        return super().form_valid(form)
 
     def get_success_message(self, form):
         return render_to_string(
@@ -346,24 +298,31 @@ class BasketAddView(FormView):
 
     def get_success_url(self):
         post_url = self.request.POST.get('next')
-        if post_url and is_safe_url(post_url):
+        if post_url and is_safe_url(post_url, self.request.get_host()):
             return post_url
-        return safe_referrer(self.request.META, 'basket:summary')
+        return safe_referrer(self.request, 'basket:summary')
 
 
 class VoucherAddView(FormView):
     form_class = BasketVoucherForm
     voucher_model = get_model('voucher', 'voucher')
-    add_signal = signals.voucher_addition
+    add_signal = voucher_addition
 
     def get(self, request, *args, **kwargs):
         return redirect('basket:summary')
 
     def apply_voucher_to_basket(self, voucher):
-        if not voucher.is_active():
+        if voucher.is_expired():
             messages.error(
                 self.request,
                 _("The '%(code)s' voucher has expired") % {
+                    'code': voucher.code})
+            return
+
+        if not voucher.is_active():
+            messages.error(
+                self.request,
+                _("The '%(code)s' voucher is not active") % {
                     'code': voucher.code})
             return
 
@@ -379,7 +338,8 @@ class VoucherAddView(FormView):
             sender=self, basket=self.request.basket, voucher=voucher)
 
         # Recalculate discounts to see if the voucher gives any
-        Applicator().apply(self.request, self.request.basket)
+        Applicator().apply(self.request.basket, self.request.user,
+                           self.request)
         discounts_after = self.request.basket.offer_applications
 
         # Look for discounts from this new voucher
@@ -402,7 +362,7 @@ class VoucherAddView(FormView):
     def form_valid(self, form):
         code = form.cleaned_data['code']
         if not self.request.basket.id:
-            return redirect_to_referrer(self.request.META, 'basket:summary')
+            return redirect_to_referrer(self.request, 'basket:summary')
         if self.request.basket.contains_voucher(code):
             messages.error(
                 self.request,
@@ -418,7 +378,7 @@ class VoucherAddView(FormView):
                         'code': code})
             else:
                 self.apply_voucher_to_basket(voucher)
-        return redirect_to_referrer(self.request.META, 'basket:summary')
+        return redirect_to_referrer(self.request, 'basket:summary')
 
     def form_invalid(self, form):
         messages.error(self.request, _("Please enter a voucher code"))
@@ -427,7 +387,7 @@ class VoucherAddView(FormView):
 
 class VoucherRemoveView(View):
     voucher_model = get_model('voucher', 'voucher')
-    remove_signal = signals.voucher_removal
+    remove_signal = voucher_removal
     http_method_names = ['post']
 
     def post(self, request, *args, **kwargs):
@@ -442,7 +402,7 @@ class VoucherRemoveView(View):
             voucher = request.basket.vouchers.get(id=voucher_id)
         except ObjectDoesNotExist:
             messages.error(
-                request, _("No voucher found with id '%d'") % voucher_id)
+                request, _("No voucher found with id '%s'") % voucher_id)
         else:
             request.basket.vouchers.remove(voucher)
             self.remove_signal.send(
@@ -458,8 +418,10 @@ class SavedView(ModelFormSetView):
     basket_model = get_model('basket', 'basket')
     formset_class = SavedLineFormSet
     form_class = SavedLineForm
-    extra = 0
-    can_delete = True
+    factory_kwargs = {
+        'extra': 0,
+        'can_delete': True
+    }
 
     def get(self, request, *args, **kwargs):
         return redirect('basket:summary')
@@ -468,16 +430,15 @@ class SavedView(ModelFormSetView):
         try:
             saved_basket = self.basket_model.saved.get(owner=self.request.user)
             saved_basket.strategy = self.request.strategy
-            return saved_basket.all_lines().select_related(
-                'product', 'product__stockrecord')
+            return saved_basket.all_lines()
         except self.basket_model.DoesNotExist:
             return []
 
     def get_success_url(self):
-        return safe_referrer(self.request.META, 'basket:summary')
+        return safe_referrer(self.request, 'basket:summary')
 
     def get_formset_kwargs(self):
-        kwargs = super(SavedView, self).get_formset_kwargs()
+        kwargs = super().get_formset_kwargs()
         kwargs['prefix'] = 'saved'
         kwargs['basket'] = self.request.basket
         kwargs['strategy'] = self.request.strategy
@@ -500,10 +461,10 @@ class SavedView(ModelFormSetView):
         if is_move:
             # As we're changing the basket, we need to check if it qualifies
             # for any new offers.
-            apply_messages(self.request, offers_before)
+            BasketMessageGenerator().apply_messages(self.request, offers_before)
             response = redirect(self.get_success_url())
         else:
-            response = super(SavedView, self).formset_valid(formset)
+            response = super().formset_valid(formset)
         return response
 
     def formset_invalid(self, formset):
@@ -512,4 +473,4 @@ class SavedView(ModelFormSetView):
             '\n'.join(
                 error for ed in formset.errors for el
                 in ed.values() for error in el))
-        return redirect_to_referrer(self.request.META, 'basket:summary')
+        return redirect_to_referrer(self.request, 'basket:summary')

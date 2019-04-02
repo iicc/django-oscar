@@ -12,11 +12,9 @@
     <ul class="breadcrumb">
         <li>
             <a href="{% url 'dashboard:index' %}">{% trans "Dashboard" %}</a>
-            <span class="divider">/</span>
         </li>
         <li>
             <a href="{% url 'dashboard:page-list' %}">{% trans "Pages" %}</a>
-            <span class="divider">/</span>
         </li>
         <li class="active">{% blocktrans with title=object.title %}Delete page '{{ title }}'?{% endblocktrans %}</li>
     </ul>
@@ -30,7 +28,7 @@
     <div class="table-header">
         <h2>{% trans "Delete page" %}</h2>
     </div>
-    <form action="." method="post" class="well">
+    <form method="post" class="well">
         {% csrf_token %}
         {{ form }}
         <p>{% blocktrans with title=object.title %}Delete page <strong>{{ title }}</strong> - are you sure?{% endblocktrans %}</p>

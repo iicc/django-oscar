@@ -1,4 +1,4 @@
-from django.utils import six
+import csv
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -9,8 +9,6 @@ from oscar.core.loading import get_model
 
 # A setting that can be used in foreign key declarations
 AUTH_USER_MODEL = getattr(settings, 'AUTH_USER_MODEL', 'auth.User')
-# Two additional settings that are useful in South migrations when
-# specifying the user model in the FakeORM
 try:
     AUTH_USER_APP_LABEL, AUTH_USER_MODEL_NAME = AUTH_USER_MODEL.rsplit('.', 1)
 except ValueError:
@@ -67,18 +65,10 @@ def existing_user_fields(fields):
     """
     user_fields = get_user_model()._meta.fields
     user_field_names = [field.name for field in user_fields]
-    return list(set(fields) & set(user_field_names))
+    return [field for field in fields if field in user_field_names]
 
 
 # Python3 compatibility layer
-
-
-# Make backwards-compatible atomic decorator available
-try:
-    from django.db.transaction import atomic as atomic_compat
-except ImportError:
-    from django.db.transaction import commit_on_success as atomic_compat
-atomic_compat = atomic_compat
 
 """
 Unicode compatible wrapper for CSV reader and writer that abstracts away
@@ -93,11 +83,6 @@ Changes:
   of a view
 """
 
-import sys
-import csv
-
-PY3 = sys.version > '3'
-
 
 class UnicodeCSVReader:
     def __init__(self, filename, dialect=csv.excel,
@@ -108,11 +93,7 @@ class UnicodeCSVReader:
         self.kw = kw
 
     def __enter__(self):
-        if PY3:
-            self.f = open(self.filename, 'rt',
-                          encoding=self.encoding, newline='')
-        else:
-            self.f = open(self.filename, 'rbU')
+        self.f = open(self.filename, 'rt', encoding=self.encoding, newline='')
         self.reader = csv.reader(self.f, dialect=self.dialect,
                                  **self.kw)
         return self
@@ -121,10 +102,7 @@ class UnicodeCSVReader:
         self.f.close()
 
     def next(self):
-        row = next(self.reader)
-        if PY3:
-            return row
-        return [s.decode("utf-8") for s in row]
+        return next(self.reader)
 
     __next__ = next
 
@@ -134,7 +112,7 @@ class UnicodeCSVReader:
 
 class UnicodeCSVWriter:
     """
-    Python 2 and 3 compatible CSV writer. Supports two modes:
+    Python 2 3 compatible CSV writer. Supports two modes:
     * Writing to an open file or file-like object:
       writer = UnicodeCSVWriter(open_file=your_file)
       ...
@@ -155,24 +133,30 @@ class UnicodeCSVWriter:
         self.kw = kw
         self.writer = None
 
+        if self.f:
+            self.add_bom(self.f)
+
     def __enter__(self):
         assert self.filename is not None
-        if PY3:
-            self.f = open(self.filename, 'wt',
-                          encoding=self.encoding, newline='')
-        else:
-            self.f = open(self.filename, 'wb')
+        self.f = open(self.filename, 'wt', encoding=self.encoding, newline='')
+        self.add_bom(self.f)
+        return self
 
     def __exit__(self, type, value, traceback):
         assert self.filename is not None
         if self.filename is not None:
             self.f.close()
 
+    def add_bom(self, f):
+        # If encoding is UTF-8, insert a Byte Order Mark at the start of the
+        # file for compatibility with MS Excel.
+        if (self.encoding == 'utf-8'
+                and getattr(settings, 'OSCAR_CSV_INCLUDE_BOM', False)):
+            self.f.write('\ufeff')
+
     def writerow(self, row):
         if self.writer is None:
             self.writer = csv.writer(self.f, dialect=self.dialect, **self.kw)
-        if not PY3:
-            row = [six.text_type(s).encode(self.encoding) for s in row]
         self.writer.writerow(list(row))
 
     def writerows(self, rows):

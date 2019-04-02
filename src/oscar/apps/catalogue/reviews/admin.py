@@ -1,6 +1,9 @@
 from django.contrib import admin
 
-from oscar.apps.catalogue.reviews.models import ProductReview, Vote
+from oscar.core.loading import get_model
+
+ProductReview = get_model('reviews', 'ProductReview')
+Vote = get_model('reviews', 'Vote')
 
 
 class ProductReviewAdmin(admin.ModelAdmin):
@@ -11,6 +14,7 @@ class ProductReviewAdmin(admin.ModelAdmin):
 
 class VoteAdmin(admin.ModelAdmin):
     list_display = ('review', 'user', 'delta', 'date_created')
+
 
 admin.site.register(ProductReview, ProductReviewAdmin)
 admin.site.register(Vote, VoteAdmin)

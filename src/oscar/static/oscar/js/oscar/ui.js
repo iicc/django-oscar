@@ -1,3 +1,5 @@
+/*global jQuery */
+
 var oscar = (function(o, $) {
     // Replicate Django's flash messages so they can be used by AJAX callbacks.
     o.messages = {
@@ -34,15 +36,8 @@ var oscar = (function(o, $) {
         initFacetWidgets: function() {
             // Bind events to facet checkboxes
             $('.facet_checkbox').on('change', function() {
-                window.location.href = $(this).next('.facet_url').val();
+                window.location.href = $(this).nextAll('.facet_url').val();
             });
-        }
-    };
-
-    // This block may need removing after reworking of promotions app
-    o.promotions = {
-        init: function() {
-
         }
     };
 
@@ -75,26 +70,26 @@ var oscar = (function(o, $) {
             // Do not disable if button is inside a form with invalid fields.
             // This uses a delegated event so that it keeps working for forms that are reloaded
             // via AJAX: https://api.jquery.com/on/#direct-and-delegated-events
-            $(document.body).on('click', '[data-loading-text]', function(){
-                var form = $(this).parents("form");
-                if (!form || $(":invalid", form).length == 0)
-                    $(this).button('loading');
+            $(document.body).on('submit', 'form', function(){
+                var form = $(this);
+                if ($(":invalid", form).length == 0)
+                    $(this).find('button[data-loading-text]').button('loading');
             });
             // stuff for star rating on review page
             // show clickable stars instead of a select dropdown for product rating
-            ratings = $('.reviewrating');
+            var ratings = $('.reviewrating');
             if(ratings.length){
                 ratings.find('.star-rating i').on('click',o.forms.reviewRatingClick);
             }
         },
-        submitIfNotLocked: function(event) {
+        submitIfNotLocked: function() {
             var $form = $(this);
             if ($form.data('locked')) {
                 return false;
             }
             $form.data('locked', true);
         },
-        reviewRatingClick: function(event){
+        reviewRatingClick: function(){
             var ratings = ['One','Two','Three','Four','Five']; //possible classes for display state
             $(this).parent().removeClass('One Two Three Four Five').addClass(ratings[$(this).index()]);
             $(this).closest('.controls').find('select').val($(this).index() + 1); //select is hidden, set value
@@ -182,7 +177,7 @@ var oscar = (function(o, $) {
                 o.basket.checkAndSubmit($(this), 'form', 'save_for_later');
                 event.preventDefault();
             });
-            $('#content_inner').on('click', '#saved_basket_formset a[data-behaviours~="move"]', function(event) {
+            $('#content_inner').on('click', '#saved_basket_formset a[data-behaviours~="move"]', function() {
                 o.basket.checkAndSubmit($(this), 'saved', 'move_to_basket');
             });
             $('#content_inner').on('click', '#saved_basket_formset a[data-behaviours~="remove"]', function(event) {
@@ -266,8 +261,76 @@ var oscar = (function(o, $) {
         }
     };
 
+    o.datetimepickers = {
+        init: function() {
+            o.datetimepickers.initDatePickers(window.document);
+        },
+        options: {
+            'languageCode': 'en',
+            'dateFormat': 'yy-mm-dd',
+            'timeFormat': 'hh:ii',
+            'datetimeFormat': 'yy-mm-dd hh:ii',
+            'stepMinute': 15,
+        },
+        initDatePickers: function(el) {
+            if ($.fn.datetimepicker) {
+                var defaultDatepickerConfig = {
+                    'format': o.datetimepickers.options.dateFormat,
+                    'autoclose': true,
+                    'language': o.datetimepickers.options.languageCode,
+                    'minView': 2
+                };
+                var $dates = $(el).find('[data-oscarWidget="date"]').not('.no-widget-init').not('.no-widget-init *');
+                $dates.each(function(ind, ele) {
+                    var $ele = $(ele),
+                        config = $.extend({}, defaultDatepickerConfig, {
+                            'format': $ele.data('dateformat')
+                        });
+                    $ele.datetimepicker(config);
+                });
+
+                var defaultDatetimepickerConfig = {
+                    'format': o.datetimepickers.options.datetimeFormat,
+                    'minuteStep': o.datetimepickers.options.stepMinute,
+                    'autoclose': true,
+                    'language': o.datetimepickers.options.languageCode
+                };
+                var $datetimes = $(el).find('[data-oscarWidget="datetime"]').not('.no-widget-init').not('.no-widget-init *');
+                $datetimes.each(function(ind, ele) {
+                    var $ele = $(ele),
+                        config = $.extend({}, defaultDatetimepickerConfig, {
+                            'format': $ele.data('datetimeformat'),
+                            'minuteStep': $ele.data('stepminute')
+                        });
+                    $ele.datetimepicker(config);
+                });
+
+                var defaultTimepickerConfig = {
+                    'format': o.datetimepickers.options.timeFormat,
+                    'minuteStep': o.datetimepickers.options.stepMinute,
+                    'autoclose': true,
+                    'language': o.datetimepickers.options.languageCode
+                };
+                var $times = $(el).find('[data-oscarWidget="time"]').not('.no-widget-init').not('.no-widget-init *');
+                $times.each(function(ind, ele) {
+                    var $ele = $(ele),
+                        config = $.extend({}, defaultTimepickerConfig, {
+                            'format': $ele.data('timeformat'),
+                            'minuteStep': $ele.data('stepminute'),
+                            'startView': 1,
+                            'maxView': 1,
+                            'formatViewType': 'time'
+                        });
+                    $ele.datetimepicker(config);
+                });
+            }
+        }
+    };
+
+
     o.init = function() {
         o.forms.init();
+        o.datetimepickers.init();
         o.page.init();
         o.responsive.init();
         o.responsive.initSlider();

@@ -1,23 +1,32 @@
-from itertools import chain
-from decimal import Decimal as D
 import hashlib
+import logging
+from collections import OrderedDict
+from decimal import Decimal as D
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
+from django.core.signing import BadSignature, Signer
 from django.db import models
 from django.db.models import Sum
 from django.utils import timezone
-from django.utils.encoding import python_2_unicode_compatible
-from django.utils.translation import ugettext_lazy as _, pgettext_lazy
-from django.utils.datastructures import SortedDict
+from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import pgettext_lazy
 
-from oscar.core.utils import get_default_currency
+from oscar.apps.order.signals import (
+    order_line_status_changed, order_status_changed)
 from oscar.core.compat import AUTH_USER_MODEL
+from oscar.core.loading import get_model
+from oscar.core.utils import get_default_currency
 from oscar.models.fields import AutoSlugField
+
 from . import exceptions
 
 
-@python_2_unicode_compatible
+logger = logging.getLogger('oscar.order')
+
+
 class AbstractOrder(models.Model):
     """
     The main order model
@@ -116,6 +125,9 @@ class AbstractOrder(models.Model):
         """
         if new_status == self.status:
             return
+
+        old_status = self.status
+
         if new_status not in self.available_statuses():
             raise exceptions.InvalidOrderStatus(
                 _("'%(new_status)s' is not a valid status for order %(number)s"
@@ -129,7 +141,21 @@ class AbstractOrder(models.Model):
                 line.status = self.cascade[self.status]
                 line.save()
         self.save()
+
+        # Send signal for handling status changed
+        order_status_changed.send(sender=self,
+                                  order=self,
+                                  old_status=old_status,
+                                  new_status=new_status,
+                                  )
+
+        self._create_order_status_change(old_status, new_status)
+
     set_status.alters_data = True
+
+    def _create_order_status_change(self, old_status, new_status):
+        # Not setting the status on the order as that should be handled before
+        self.status_changes.create(old_status=old_status, new_status=new_status)
 
     @property
     def is_anonymous(self):
@@ -174,13 +200,13 @@ class AbstractOrder(models.Model):
 
     @property
     def total_before_discounts_incl_tax(self):
-        return (self.basket_total_before_discounts_incl_tax +
-                self.shipping_incl_tax)
+        return (self.basket_total_before_discounts_incl_tax
+                + self.shipping_incl_tax)
 
     @property
     def total_before_discounts_excl_tax(self):
-        return (self.basket_total_before_discounts_excl_tax +
-                self.shipping_excl_tax)
+        return (self.basket_total_before_discounts_excl_tax
+                + self.shipping_excl_tax)
 
     @property
     def total_discount_incl_tax(self):
@@ -223,24 +249,28 @@ class AbstractOrder(models.Model):
 
     @property
     def shipping_status(self):
-        events = self.shipping_events.all()
+        """Return the last complete shipping event for this order."""
+
+        # As safeguard against identical timestamps, also sort by the primary
+        # key. It's not recommended to rely on this behaviour, but in practice
+        # reasonably safe if PKs are not manually set.
+        events = self.shipping_events.order_by('-date_created', '-pk').all()
         if not len(events):
             return ''
 
         # Collect all events by event-type
-        map = {}
+        event_map = OrderedDict()
         for event in events:
             event_name = event.event_type.name
-            if event_name not in map:
-                map[event_name] = []
-            map[event_name] = list(chain(map[event_name],
-                                         event.line_quantities.all()))
+            if event_name not in event_map:
+                event_map[event_name] = []
+            event_map[event_name].extend(list(event.line_quantities.all()))
 
         # Determine last complete event
         status = _("In progress")
-        for event_name, event_line_quantities in map.items():
+        for event_name, event_line_quantities in event_map.items():
             if self._is_event_complete(event_line_quantities):
-                status = event_name
+                return event_name
         return status
 
     @property
@@ -258,14 +288,14 @@ class AbstractOrder(models.Model):
 
     def _is_event_complete(self, event_quantities):
         # Form map of line to quantity
-        map = {}
+        event_map = {}
         for event_quantity in event_quantities:
             line_id = event_quantity.line_id
-            map.setdefault(line_id, 0)
-            map[line_id] += event_quantity.quantity
+            event_map.setdefault(line_id, 0)
+            event_map[line_id] += event_quantity.quantity
 
         for line in self.lines.all():
-            if map[line.id] != line.quantity:
+            if event_map.get(line.pk, 0) != line.quantity:
                 return False
         return True
 
@@ -277,12 +307,51 @@ class AbstractOrder(models.Model):
         verbose_name_plural = _("Orders")
 
     def __str__(self):
-        return u"#%s" % (self.number,)
+        return "#%s" % (self.number,)
 
     def verification_hash(self):
-        key = '%s%s' % (self.number, settings.SECRET_KEY)
-        hash = hashlib.md5(key.encode('utf8'))
-        return hash.hexdigest()
+        signer = Signer(salt='oscar.apps.order.Order')
+        return signer.sign(self.number)
+
+    def check_deprecated_verification_hash(self, hash_to_check):
+        """
+        Backward compatible check for md5 hashes that were generated in
+        Oscar 1.5 and lower.
+
+        This must explicitly be enabled by setting OSCAR_DEPRECATED_ORDER_VERIFY_KEY,
+        which must not be equal to SECRET_KEY - i.e., the project must
+        have changed its SECRET_KEY since this change was applied.
+
+        TODO: deprecate this method in Oscar 2.0, and remove it in Oscar 2.1.
+        """
+        old_verification_key = getattr(settings, 'OSCAR_DEPRECATED_ORDER_VERIFY_KEY', None)
+        if old_verification_key is None:
+            return False
+
+        if old_verification_key == settings.SECRET_KEY:
+            raise ImproperlyConfigured(
+                'OSCAR_DEPRECATED_ORDER_VERIFY_KEY cannot be equal to SECRET_KEY')
+
+        logger.warning('Using insecure md5 hashing for order URL hash verification.')
+        string_to_hash = '%s%s' % (self.number, old_verification_key)
+        order_hash = hashlib.md5(string_to_hash.encode('utf8')).hexdigest()
+        return constant_time_compare(order_hash, hash_to_check)
+
+    def check_verification_hash(self, hash_to_check):
+        """
+        Checks the received verification hash against this order number.
+        Returns False if the verification failed, True otherwise.
+        """
+        if self.check_deprecated_verification_hash(hash_to_check):
+            return True
+
+        signer = Signer(salt='oscar.apps.order.Order')
+        try:
+            signed_number = signer.unsign(hash_to_check)
+        except BadSignature:
+            return False
+
+        return constant_time_compare(signed_number, self.number)
 
     @property
     def email(self):
@@ -316,10 +385,9 @@ class AbstractOrder(models.Model):
         # this gives us the ability to set the date_placed explicitly (which is
         # useful when importing orders from another system).
         self.set_date_placed_default()
-        super(AbstractOrder, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
 
-@python_2_unicode_compatible
 class AbstractOrderNote(models.Model):
     """
     A note against an order.
@@ -327,13 +395,19 @@ class AbstractOrderNote(models.Model):
     This are often used for audit purposes too.  IE, whenever an admin
     makes a change to an order, we create a note to record what happened.
     """
-    order = models.ForeignKey('order.Order', related_name="notes",
-                              verbose_name=_("Order"))
+    order = models.ForeignKey(
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name="notes",
+        verbose_name=_("Order"))
 
     # These are sometimes programatically generated so don't need a
     # user everytime
-    user = models.ForeignKey(AUTH_USER_MODEL, null=True,
-                             verbose_name=_("User"))
+    user = models.ForeignKey(
+        AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        verbose_name=_("User"))
 
     # We allow notes to be classified although this isn't always needed
     INFO, WARNING, ERROR, SYSTEM = 'Info', 'Warning', 'Error', 'System'
@@ -353,7 +427,7 @@ class AbstractOrderNote(models.Model):
         verbose_name_plural = _("Order Notes")
 
     def __str__(self):
-        return u"'%s' (%s)" % (self.message[0:50], self.user)
+        return "'%s' (%s)" % (self.message[0:50], self.user)
 
     def is_editable(self):
         if self.note_type == self.SYSTEM:
@@ -362,18 +436,45 @@ class AbstractOrderNote(models.Model):
         return delta.seconds < self.editable_lifetime
 
 
-@python_2_unicode_compatible
+class AbstractOrderStatusChange(models.Model):
+    order = models.ForeignKey(
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name='status_changes',
+        verbose_name=_('Order Status Changes')
+    )
+    old_status = models.CharField(_('Old Status'), max_length=100, blank=True)
+    new_status = models.CharField(_('New Status'), max_length=100, blank=True)
+    date_created = models.DateTimeField(_('Date Created'), auto_now_add=True, db_index=True)
+
+    class Meta:
+        abstract = True
+        app_label = 'order'
+        verbose_name = _('Order Status Change')
+        verbose_name_plural = _('Order Status Changes')
+        ordering = ['-date_created']
+
+    def __str__(self):
+        return _('{order} has changed status from {old_status} to {new_status}').format(
+            order=self.order, old_status=self.old_status, new_status=self.new_status
+        )
+
+
 class AbstractCommunicationEvent(models.Model):
     """
     An order-level event involving a communication to the customer, such
     as an confirmation email being sent.
     """
     order = models.ForeignKey(
-        'order.Order', related_name="communication_events",
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name="communication_events",
         verbose_name=_("Order"))
     event_type = models.ForeignKey(
-        'customer.CommunicationEventType', verbose_name=_("Event Type"))
-    date_created = models.DateTimeField(_("Date"), auto_now_add=True)
+        'customer.CommunicationEventType',
+        on_delete=models.CASCADE,
+        verbose_name=_("Event Type"))
+    date_created = models.DateTimeField(_("Date"), auto_now_add=True, db_index=True)
 
     class Meta:
         abstract = True
@@ -390,13 +491,15 @@ class AbstractCommunicationEvent(models.Model):
 # LINES
 
 
-@python_2_unicode_compatible
 class AbstractLine(models.Model):
     """
     An order line
     """
     order = models.ForeignKey(
-        'order.Order', related_name='lines', verbose_name=_("Order"))
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name='lines',
+        verbose_name=_("Order"))
 
     # PARTNER INFORMATION
     # -------------------
@@ -436,7 +539,7 @@ class AbstractLine(models.Model):
         'catalogue.Product', on_delete=models.SET_NULL, blank=True, null=True,
         verbose_name=_("Product"))
     title = models.CharField(
-        pgettext_lazy(u"Product title", u"Title"), max_length=255)
+        pgettext_lazy("Product title", "Title"), max_length=255)
     # UPC can be null because it's usually set as the product's UPC, and that
     # can be null as well
     upc = models.CharField(_("UPC"), max_length=128, blank=True, null=True)
@@ -448,8 +551,10 @@ class AbstractLine(models.Model):
 
     # Price information (these fields are actually redundant as the information
     # can be calculated from the LinePrice models
+    # Deprecated - will be removed in Oscar 2.0
     line_price_incl_tax = models.DecimalField(
         _("Price (inc. tax)"), decimal_places=2, max_digits=12)
+    # Deprecated - will be removed in Oscar 2.0
     line_price_excl_tax = models.DecimalField(
         _("Price (excl. tax)"), decimal_places=2, max_digits=12)
 
@@ -461,8 +566,7 @@ class AbstractLine(models.Model):
         _("Price before discounts (excl. tax)"),
         decimal_places=2, max_digits=12)
 
-    # Cost price (the price charged by the fulfilment partner for this
-    # product).
+    # Deprecated - will be removed in Oscar 2.0
     unit_cost_price = models.DecimalField(
         _("Unit Cost Price"), decimal_places=2, max_digits=12, blank=True,
         null=True)
@@ -473,7 +577,7 @@ class AbstractLine(models.Model):
     unit_price_excl_tax = models.DecimalField(
         _("Unit Price (excl. tax)"), decimal_places=2, max_digits=12,
         blank=True, null=True)
-    # Retail price at time of purchase
+    # Deprecated - will be removed in Oscar 2.0
     unit_retail_price = models.DecimalField(
         _("Unit Retail Price"), decimal_places=2, max_digits=12,
         blank=True, null=True)
@@ -482,7 +586,7 @@ class AbstractLine(models.Model):
     # own business processes.
     status = models.CharField(_("Status"), max_length=255, blank=True)
 
-    # Estimated dispatch date - should be set at order time
+    # Deprecated - will be removed in Oscar 2.0
     est_dispatch_date = models.DateField(
         _("Estimated Dispatch Date"), blank=True, null=True)
 
@@ -494,6 +598,8 @@ class AbstractLine(models.Model):
     class Meta:
         abstract = True
         app_label = 'order'
+        # Enforce sorting in order of creation.
+        ordering = ['pk']
         verbose_name = _("Order Line")
         verbose_name_plural = _("Order Lines")
 
@@ -527,6 +633,9 @@ class AbstractLine(models.Model):
         """
         if new_status == self.status:
             return
+
+        old_status = self.status
+
         if new_status not in self.available_statuses():
             raise exceptions.InvalidLineStatus(
                 _("'%(new_status)s' is not a valid status (current status:"
@@ -534,14 +643,15 @@ class AbstractLine(models.Model):
                 % {'new_status': new_status, 'status': self.status})
         self.status = new_status
         self.save()
-    set_status.alters_data = True
 
-    @property
-    def category(self):
-        """
-        Used by Google analytics tracking
-        """
-        return None
+        # Send signal for handling status changed
+        order_line_status_changed.send(sender=self,
+                                       line=self,
+                                       old_status=old_status,
+                                       new_status=new_status,
+                                       )
+
+    set_status.alters_data = True
 
     @property
     def description(self):
@@ -649,7 +759,7 @@ class AbstractLine(models.Model):
         """
         Returns a dict of shipping events that this line has been through
         """
-        status_map = SortedDict()
+        status_map = OrderedDict()
         for event in self.shipping_events.all():
             event_type = event.event_type
             event_name = event_type.name
@@ -715,13 +825,14 @@ class AbstractLine(models.Model):
         return True, None
 
 
-@python_2_unicode_compatible
 class AbstractLineAttribute(models.Model):
     """
     An attribute of a line
     """
     line = models.ForeignKey(
-        'order.Line', related_name='attributes',
+        'order.Line',
+        on_delete=models.CASCADE,
+        related_name='attributes',
         verbose_name=_("Line"))
     option = models.ForeignKey(
         'catalogue.Option', null=True, on_delete=models.SET_NULL,
@@ -739,7 +850,6 @@ class AbstractLineAttribute(models.Model):
         return "%s = %s" % (self.type, self.value)
 
 
-@python_2_unicode_compatible
 class AbstractLinePrice(models.Model):
     """
     For tracking the prices paid for each unit within a line.
@@ -749,9 +859,15 @@ class AbstractLinePrice(models.Model):
     50% off as it's part of an offer while the remainder are full price.
     """
     order = models.ForeignKey(
-        'order.Order', related_name='line_prices', verbose_name=_("Option"))
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name='line_prices',
+        verbose_name=_("Option"))
     line = models.ForeignKey(
-        'order.Line', related_name='prices', verbose_name=_("Line"))
+        'order.Line',
+        on_delete=models.CASCADE,
+        related_name='prices',
+        verbose_name=_("Line"))
     quantity = models.PositiveIntegerField(_("Quantity"), default=1)
     price_incl_tax = models.DecimalField(
         _("Price (inc. tax)"), decimal_places=2, max_digits=12)
@@ -779,7 +895,6 @@ class AbstractLinePrice(models.Model):
 # PAYMENT EVENTS
 
 
-@python_2_unicode_compatible
 class AbstractPaymentEventType(models.Model):
     """
     Payment event types are things like 'Paid', 'Failed', 'Refunded'.
@@ -801,7 +916,6 @@ class AbstractPaymentEventType(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class AbstractPaymentEvent(models.Model):
     """
     A payment event for an order
@@ -812,7 +926,9 @@ class AbstractPaymentEvent(models.Model):
     * 2 lines have been refunded
     """
     order = models.ForeignKey(
-        'order.Order', related_name='payment_events',
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name='payment_events',
         verbose_name=_("Order"))
     amount = models.DecimalField(
         _("Amount"), decimal_places=2, max_digits=12)
@@ -824,14 +940,18 @@ class AbstractPaymentEvent(models.Model):
         'order.Line', through='PaymentEventQuantity',
         verbose_name=_("Lines"))
     event_type = models.ForeignKey(
-        'order.PaymentEventType', verbose_name=_("Event Type"))
+        'order.PaymentEventType',
+        on_delete=models.CASCADE,
+        verbose_name=_("Event Type"))
     # Allow payment events to be linked to shipping events.  Often a shipping
     # event will trigger a payment event and so we can use this FK to capture
     # the relationship.
     shipping_event = models.ForeignKey(
-        'order.ShippingEvent', related_name='payment_events',
-        null=True)
-    date_created = models.DateTimeField(_("Date created"), auto_now_add=True)
+        'order.ShippingEvent',
+        null=True,
+        on_delete=models.CASCADE,
+        related_name='payment_events')
+    date_created = models.DateTimeField(_("Date created"), auto_now_add=True, db_index=True)
 
     class Meta:
         abstract = True
@@ -852,10 +972,14 @@ class PaymentEventQuantity(models.Model):
     A "through" model linking lines to payment events
     """
     event = models.ForeignKey(
-        'order.PaymentEvent', related_name='line_quantities',
+        'order.PaymentEvent',
+        on_delete=models.CASCADE,
+        related_name='line_quantities',
         verbose_name=_("Event"))
     line = models.ForeignKey(
-        'order.Line', related_name="payment_event_quantities",
+        'order.Line',
+        on_delete=models.CASCADE,
+        related_name="payment_event_quantities",
         verbose_name=_("Line"))
     quantity = models.PositiveIntegerField(_("Quantity"))
 
@@ -869,24 +993,28 @@ class PaymentEventQuantity(models.Model):
 # SHIPPING EVENTS
 
 
-@python_2_unicode_compatible
 class AbstractShippingEvent(models.Model):
     """
     An event is something which happens to a group of lines such as
     1 item being dispatched.
     """
     order = models.ForeignKey(
-        'order.Order', related_name='shipping_events', verbose_name=_("Order"))
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name='shipping_events',
+        verbose_name=_("Order"))
     lines = models.ManyToManyField(
         'order.Line', related_name='shipping_events',
         through='ShippingEventQuantity', verbose_name=_("Lines"))
     event_type = models.ForeignKey(
-        'order.ShippingEventType', verbose_name=_("Event Type"))
+        'order.ShippingEventType',
+        on_delete=models.CASCADE,
+        verbose_name=_("Event Type"))
     notes = models.TextField(
         _("Event notes"), blank=True,
         help_text=_("This could be the dispatch reference, or a "
                     "tracking number"))
-    date_created = models.DateTimeField(_("Date Created"), auto_now_add=True)
+    date_created = models.DateTimeField(_("Date Created"), auto_now_add=True, db_index=True)
 
     class Meta:
         abstract = True
@@ -904,7 +1032,6 @@ class AbstractShippingEvent(models.Model):
         return self.lines.count()
 
 
-@python_2_unicode_compatible
 class ShippingEventQuantity(models.Model):
     """
     A "through" model linking lines to shipping events.
@@ -913,10 +1040,14 @@ class ShippingEventQuantity(models.Model):
     particular shipping event.
     """
     event = models.ForeignKey(
-        'order.ShippingEvent', related_name='line_quantities',
+        'order.ShippingEvent',
+        on_delete=models.CASCADE,
+        related_name='line_quantities',
         verbose_name=_("Event"))
     line = models.ForeignKey(
-        'order.Line', related_name="shipping_event_quantities",
+        'order.Line',
+        on_delete=models.CASCADE,
+        related_name="shipping_event_quantities",
         verbose_name=_("Line"))
     quantity = models.PositiveIntegerField(_("Quantity"))
 
@@ -934,7 +1065,7 @@ class ShippingEventQuantity(models.Model):
         if not self.line.is_shipping_event_permitted(
                 self.event.event_type, self.quantity):
             raise exceptions.InvalidShippingEvent
-        super(ShippingEventQuantity, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return _("%(product)s - quantity %(qty)d") % {
@@ -942,7 +1073,6 @@ class ShippingEventQuantity(models.Model):
             'qty': self.quantity}
 
 
-@python_2_unicode_compatible
 class AbstractShippingEventType(models.Model):
     """
     A type of shipping/fulfillment event
@@ -969,7 +1099,6 @@ class AbstractShippingEventType(models.Model):
 # DISCOUNTS
 
 
-@python_2_unicode_compatible
 class AbstractOrderDiscount(models.Model):
     """
     A discount against an order.
@@ -982,7 +1111,10 @@ class AbstractOrderDiscount(models.Model):
     track benefit applications which aren't necessarily discounts.
     """
     order = models.ForeignKey(
-        'order.Order', related_name="discounts", verbose_name=_("Order"))
+        'order.Order',
+        on_delete=models.CASCADE,
+        related_name="discounts",
+        verbose_name=_("Order"))
 
     # We need to distinguish between basket discounts, shipping discounts and
     # 'deferred' discounts.
@@ -1041,7 +1173,7 @@ class AbstractOrderDiscount(models.Model):
             if voucher:
                 self.voucher_code = voucher.code
 
-        super(AbstractOrderDiscount, self).save(**kwargs)
+        super().save(**kwargs)
 
     def __str__(self):
         return _("Discount of %(amount)r from order %(order)s") % {
@@ -1049,7 +1181,7 @@ class AbstractOrderDiscount(models.Model):
 
     @property
     def offer(self):
-        Offer = models.get_model('offer', 'ConditionalOffer')
+        Offer = get_model('offer', 'ConditionalOffer')
         try:
             return Offer.objects.get(id=self.offer_id)
         except Offer.DoesNotExist:
@@ -1057,7 +1189,7 @@ class AbstractOrderDiscount(models.Model):
 
     @property
     def voucher(self):
-        Voucher = models.get_model('voucher', 'Voucher')
+        Voucher = get_model('voucher', 'Voucher')
         try:
             return Voucher.objects.get(id=self.voucher_id)
         except Voucher.DoesNotExist:
@@ -1066,4 +1198,4 @@ class AbstractOrderDiscount(models.Model):
     def description(self):
         if self.voucher_code:
             return self.voucher_code
-        return self.offer_name or u""
+        return self.offer_name or ""

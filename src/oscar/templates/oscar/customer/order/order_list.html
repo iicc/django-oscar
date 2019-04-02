@@ -3,6 +3,19 @@
 {% load currency_filters %}
 {% load staticfiles %}
 
+{% block styles %}
+    {{ block.super }}
+    <link rel="stylesheet" href="{% static "oscar/js/bootstrap-datetimepicker/bootstrap-datetimepicker.min.css" %}" />
+    <link rel="stylesheet" type="text/css" href="{% static "oscar/css/datetimepicker.css" %}" />
+{% endblock %}
+
+{% block scripts %}
+    {{ block.super }}
+    <script src="{% static "oscar/js/bootstrap-datetimepicker/bootstrap-datetimepicker.min.js" %}"></script>
+    <script src="{% static "oscar/js/bootstrap-datetimepicker/locales/bootstrap-datetimepicker.all.js" %}"></script>
+{% endblock %}
+
+
 {% block breadcrumbs %}
     <ul class="breadcrumb">
         <li>
@@ -20,11 +33,13 @@
     {% if orders or form.is_bound %}
         <div class="well">
             <h2>{% trans "Filter" %}</h2>
-            <form action="." method="get" class="form-horizontal">
+            <form method="get" class="form-horizontal">
                 {% include "partials/form_fields.html" with form=form style='horizontal' %}
-                <div class="controls">
-                    <button type="submit" class="btn btn-primary" data-loading-text="{% trans 'Filtering...' %}">{% trans 'Filter results' %}</button>
-                    <a href="{% url 'customer:order-list' %}" class="btn btn-default">{% trans 'Reset' %}</a>
+                <div class="form-group">
+                    <div class="col-sm-offset-4 col-sm-8">
+                        <button type="submit" class="btn btn-primary" data-loading-text="{% trans 'Filtering...' %}">{% trans 'Filter results' %}</button>
+                        <a href="{% url 'customer:order-list' %}" class="btn btn-default">{% trans 'Reset' %}</a>
+                    </div>
                 </div>
             </form>
         </div>
@@ -58,18 +73,3 @@
     {% endif %}
 
 {% endblock tabcontent %}
-
-{% block extrastyles %}
-    {{ block.super }}
-    <link rel="stylesheet" href="//code.jquery.com/ui/1.10.3/themes/cupertino/jquery-ui.css">
-{% endblock %}
-
-{% block cdn_scripts %}
-    {{ block.super }}
-    <script src="//code.jquery.com/ui/1.10.3/jquery-ui.min.js" type="text/javascript" charset="utf-8"></script>
-{% endblock %}
-
-{% block onbodyload %}
-    {{ block.super }}
-    $('#id_date_to, #id_date_from').datepicker({'dateFormat': 'yy-mm-dd'});
-{% endblock %}

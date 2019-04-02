@@ -1,21 +1,20 @@
 import os
-import zlib
-import tarfile
-import zipfile
-import tempfile
 import shutil
+import tarfile
+import tempfile
+import zipfile
+import zlib
+
+from django.core.exceptions import FieldError
+from django.core.files import File
+from django.db.transaction import atomic
+from django.utils.translation import gettext_lazy as _
 from PIL import Image
 
-from django.core.files import File
-from django.core.exceptions import FieldError
-from django.utils.translation import ugettext_lazy as _
-
-from oscar.core.loading import get_model
-from oscar.core.compat import atomic_compat
 from oscar.apps.catalogue.exceptions import (
-    ImageImportError, IdenticalImageError, InvalidImageArchive)
+    IdenticalImageError, ImageImportError, InvalidImageArchive)
+from oscar.core.loading import get_model
 
-Category = get_model('catalogue', 'category')
 Product = get_model('catalogue', 'product')
 ProductImage = get_model('catalogue', 'productimage')
 
@@ -30,7 +29,7 @@ class Importer(object):
         self.logger = logger
         self._field = field
 
-    @atomic_compat  # noqa (too complex (10))
+    @atomic  # noqa (too complex (10))
     def handle(self, dirname):
         stats = {
             'num_processed': 0,

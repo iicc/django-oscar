@@ -1,16 +1,15 @@
 from django.contrib import messages
 from django.core.paginator import InvalidPage
-from django.utils.http import urlquote
-from django.http import HttpResponsePermanentRedirect
+from django.http import Http404, HttpResponsePermanentRedirect
 from django.shortcuts import get_object_or_404, redirect
+from django.utils.http import urlquote
+from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView, TemplateView
-from django.utils.translation import ugettext_lazy as _
 
-from oscar.core.loading import get_class, get_model
 from oscar.apps.catalogue.signals import product_viewed
+from oscar.core.loading import get_class, get_model
 
 Product = get_model('catalogue', 'product')
-ProductReview = get_model('reviews', 'ProductReview')
 Category = get_model('catalogue', 'category')
 ProductAlert = get_model('customer', 'ProductAlert')
 ProductAlertForm = get_class('customer.forms', 'ProductAlertForm')
@@ -27,8 +26,10 @@ class ProductDetailView(DetailView):
     # Whether to redirect to the URL with the right path
     enforce_paths = True
 
-    # Whether to redirect child products to their parent's URL
-    enforce_parent = True
+    # Whether to redirect child products to their parent's URL. If it's disabled,
+    # we display variant product details on the separate page. Otherwise, details
+    # displayed on parent product page.
+    enforce_parent = False
 
     def get(self, request, **kwargs):
         """
@@ -40,16 +41,23 @@ class ProductDetailView(DetailView):
         if redirect is not None:
             return redirect
 
-        response = super(ProductDetailView, self).get(request, **kwargs)
+        # Do allow staff members so they can test layout etc.
+        if not self.is_viewable(product, request):
+            raise Http404()
+
+        response = super().get(request, **kwargs)
         self.send_signal(request, response, product)
         return response
+
+    def is_viewable(self, product, request):
+        return product.is_public or request.user.is_staff
 
     def get_object(self, queryset=None):
         # Check if self.object is already set to prevent unnecessary DB calls
         if hasattr(self, 'object'):
             return self.object
         else:
-            return super(ProductDetailView, self).get_object(queryset)
+            return super().get_object(queryset)
 
     def redirect_if_necessary(self, current_path, product):
         if self.enforce_parent and product.is_child:
@@ -62,8 +70,7 @@ class ProductDetailView(DetailView):
                 return HttpResponsePermanentRedirect(expected_path)
 
     def get_context_data(self, **kwargs):
-        ctx = super(ProductDetailView, self).get_context_data(**kwargs)
-        ctx['reviews'] = self.get_reviews()
+        ctx = super().get_context_data(**kwargs)
         ctx['alert_form'] = self.get_alert_form()
         ctx['has_active_alert'] = self.get_alert_status()
         return ctx
@@ -71,7 +78,7 @@ class ProductDetailView(DetailView):
     def get_alert_status(self):
         # Check if this user already have an alert for this product
         has_alert = False
-        if self.request.user.is_authenticated():
+        if self.request.user.is_authenticated:
             alerts = ProductAlert.objects.filter(
                 product=self.object, user=self.request.user,
                 status=ProductAlert.ACTIVE)
@@ -81,9 +88,6 @@ class ProductDetailView(DetailView):
     def get_alert_form(self):
         return ProductAlertForm(
             user=self.request.user, product=self.object)
-
-    def get_reviews(self):
-        return self.object.reviews.filter(status=ProductReview.APPROVED)
 
     def send_signal(self, request, response, product):
         self.view_signal.send(
@@ -110,7 +114,7 @@ class ProductDetailView(DetailView):
                 self.template_folder, self.object.upc),
             '%s/detail-for-class-%s.html' % (
                 self.template_folder, self.object.get_product_class().slug),
-            '%s/detail.html' % (self.template_folder)]
+            '%s/detail.html' % self.template_folder]
 
 
 class CatalogueView(TemplateView):
@@ -128,7 +132,7 @@ class CatalogueView(TemplateView):
             # Redirect to page one.
             messages.error(request, _('The given page number was invalid.'))
             return redirect('catalogue:index')
-        return super(CatalogueView, self).get(request, *args, **kwargs)
+        return super().get(request, *args, **kwargs)
 
     def get_search_handler(self, *args, **kwargs):
         return get_product_search_handler_class()(*args, **kwargs)
@@ -165,19 +169,10 @@ class ProductCategoryView(TemplateView):
             messages.error(request, _('The given page number was invalid.'))
             return redirect(self.category.get_absolute_url())
 
-        return super(ProductCategoryView, self).get(request, *args, **kwargs)
+        return super().get(request, *args, **kwargs)
 
     def get_category(self):
-        if 'pk' in self.kwargs:
-            # Usual way to reach a category page. We just look at the primary
-            # key in case the slug changed. If it did, get() will redirect
-            # appropriately
-            filters = {'pk': self.kwargs['pk']}
-        else:
-            # For SEO reasons, we allow chopping off bits of the URL. If that
-            # happened, no primary key will be available.
-            filters = {'slug': self.kwargs['category_slug']}
-        return get_object_or_404(Category, **filters)
+        return get_object_or_404(Category, pk=self.kwargs['pk'])
 
     def redirect_if_necessary(self, current_path, category):
         if self.enforce_paths:
@@ -197,7 +192,7 @@ class ProductCategoryView(TemplateView):
         return self.category.get_descendants_and_self()
 
     def get_context_data(self, **kwargs):
-        context = super(ProductCategoryView, self).get_context_data(**kwargs)
+        context = super().get_context_data(**kwargs)
         context['category'] = self.category
         search_context = self.search_handler.get_search_context_data(
             self.context_object_name)

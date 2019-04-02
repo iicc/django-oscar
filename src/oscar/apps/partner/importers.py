@@ -1,13 +1,11 @@
 import os
 from decimal import Decimal as D
-from datetime import datetime
 
-from django.utils.translation import ugettext_lazy as _
+from django.db.transaction import atomic
+from django.utils.translation import gettext_lazy as _
 
-from oscar.apps.catalogue.categories import create_from_breadcrumbs
+from oscar.core.compat import UnicodeCSVReader
 from oscar.core.loading import get_class, get_classes
-from oscar.core.compat import UnicodeCSVReader, atomic_compat
-
 
 ImportingError = get_class('partner.exceptions', 'ImportingError')
 Partner, StockRecord = get_classes('partner.models', ['Partner',
@@ -15,6 +13,7 @@ Partner, StockRecord = get_classes('partner.models', ['Partner',
 ProductClass, Product, Category, ProductCategory = get_classes(
     'catalogue.models', ('ProductClass', 'Product', 'Category',
                          'ProductCategory'))
+create_from_breadcrumbs = get_class('catalogue.categories', 'create_from_breadcrumbs')
 
 
 class CatalogueImporter(object):
@@ -31,7 +30,7 @@ class CatalogueImporter(object):
         self._flush = flush
 
     def handle(self, file_path=None):
-        u"""Handles the actual import process"""
+        """Handles the actual import process"""
         if not file_path:
             raise ImportingError(_("No file path supplied"))
         Validator().validate(file_path)
@@ -41,15 +40,15 @@ class CatalogueImporter(object):
         self._import(file_path)
 
     def _flush_product_data(self):
-        u"""Flush out product and stock models"""
+        """Flush out product and stock models"""
         Product.objects.all().delete()
         ProductClass.objects.all().delete()
         Partner.objects.all().delete()
         StockRecord.objects.all().delete()
 
-    @atomic_compat
+    @atomic
     def _import(self, file_path):
-        u"""Imports given file"""
+        """Imports given file"""
         stats = {'new_items': 0,
                  'updated_items': 0}
         row_number = 0
@@ -96,7 +95,7 @@ class CatalogueImporter(object):
 
         # Category
         cat = create_from_breadcrumbs(category_str)
-        ProductCategory.objects.create(product=item, category=cat)
+        ProductCategory.objects.update_or_create(product=item, category=cat)
 
         return item
 
@@ -126,110 +125,19 @@ class Validator(object):
         self._is_readable(file_path)
 
     def _exists(self, file_path):
-        u"""Check whether a file exists"""
+        """Check whether a file exists"""
         if not os.path.exists(file_path):
             raise ImportingError(_("%s does not exist") % (file_path))
 
     def _is_file(self, file_path):
-        u"""Check whether file is actually a file type"""
+        """Check whether file is actually a file type"""
         if not os.path.isfile(file_path):
             raise ImportingError(_("%s is not a file") % (file_path))
 
     def _is_readable(self, file_path):
-        u"""Check file is readable"""
+        """Check file is readable"""
         try:
             f = open(file_path, 'r')
             f.close()
-        except:
+        except IOError:
             raise ImportingError(_("%s is not readable") % (file_path))
-
-
-class DemoSiteImporter(object):
-    """
-    Another quick and dirty catalogue product importer. Used to built the
-    demo site, and most likely not useful outside of it.
-    """
-
-    def __init__(self, logger):
-        self.logger = logger
-
-    @atomic_compat
-    def handle(self, product_class_name, filepath):
-        product_class = ProductClass.objects.get(
-            name=product_class_name)
-
-        attribute_codes = []
-        with UnicodeCSVReader(filepath) as reader:
-            for row in reader:
-                if row[1] == 'UPC':
-                    attribute_codes = row[9:]
-                    continue
-                self.create_product(product_class, attribute_codes,  row)
-
-    def create_product(self, product_class, attribute_codes, row):  # noqa
-        (ptype, upc, title, description,
-         category, partner, sku, price, stock) = row[0:9]
-
-        # Create product
-        is_child = ptype.lower() == 'variant'
-        is_parent = ptype.lower() == 'group'
-
-        if upc:
-            try:
-                product = Product.objects.get(upc=upc)
-            except Product.DoesNotExist:
-                product = Product(upc=upc)
-        else:
-            product = Product()
-
-        if is_child:
-            product.structure = Product.CHILD
-            # Assign parent for children
-            product.parent = self.parent
-        elif is_parent:
-            product.structure = Product.PARENT
-        else:
-            product.structure = Product.STANDALONE
-
-        if not product.is_child:
-            product.title = title
-            product.description = description
-            product.product_class = product_class
-
-        # Attributes
-        if not product.is_parent:
-            for code, value in zip(attribute_codes, row[9:]):
-                # Need to check if the attribute requires an Option instance
-                attr = product_class.attributes.get(
-                    code=code)
-                if attr.is_option:
-                    value = attr.option_group.options.get(option=value)
-                if attr.type == 'date':
-                    value = datetime.strptime(value, "%d/%m/%Y").date()
-                setattr(product.attr, code, value)
-
-        product.save()
-
-        # Save a reference to last parent product
-        if is_parent:
-            self.parent = product
-
-        # Category information
-        if category:
-            leaf = create_from_breadcrumbs(category)
-            ProductCategory.objects.get_or_create(
-                product=product, category=leaf)
-
-        # Stock record
-        if partner:
-            partner, __ = Partner.objects.get_or_create(name=partner)
-            try:
-                record = StockRecord.objects.get(product=product)
-            except StockRecord.DoesNotExist:
-                record = StockRecord(product=product)
-            record.partner = partner
-            record.partner_sku = sku
-            record.price_excl_tax = D(price)
-            if stock != 'NULL':
-                record.num_in_stock = stock
-            record.save()
